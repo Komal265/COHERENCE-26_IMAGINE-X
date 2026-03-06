@@ -13,18 +13,26 @@ const iconMap: Record<string, React.ElementType> = {
 
 const categoryBorders: Record<string, string> = {
   trigger: "border-primary",
-  action: "border-blue-400",
-  logic: "border-violet-400",
-  control: "border-amber-400",
-  output: "border-emerald-400",
+  action: "border-blue-400 dark:border-blue-500",
+  logic: "border-violet-400 dark:border-violet-500",
+  control: "border-amber-400 dark:border-amber-500",
+  output: "border-emerald-400 dark:border-emerald-500",
 };
 
 const categoryBgs: Record<string, string> = {
   trigger: "bg-primary/10",
-  action: "bg-blue-100",
-  logic: "bg-violet-100",
-  control: "bg-amber-100",
-  output: "bg-emerald-100",
+  action: "bg-blue-100 dark:bg-blue-900/50",
+  logic: "bg-violet-100 dark:bg-violet-900/50",
+  control: "bg-amber-100 dark:bg-amber-900/50",
+  output: "bg-emerald-100 dark:bg-emerald-900/50",
+};
+
+const categoryIconColors: Record<string, string> = {
+  trigger: "text-primary",
+  action: "text-blue-600 dark:text-blue-400",
+  logic: "text-violet-600 dark:text-violet-400",
+  control: "text-amber-600 dark:text-amber-400",
+  output: "text-emerald-600 dark:text-emerald-400",
 };
 
 function WorkflowNode({ data }: NodeProps) {
@@ -43,7 +51,7 @@ function WorkflowNode({ data }: NodeProps) {
       
       <div className="flex items-center gap-2.5">
         <div className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 ${categoryBgs[category]}`}>
-          <Icon className="h-4 w-4" />
+          <Icon className={`h-4 w-4 ${categoryIconColors[category] || "text-foreground"}`} />
         </div>
         <div className="min-w-0">
           <p className="text-xs font-semibold text-foreground truncate">{data.label as string}</p>

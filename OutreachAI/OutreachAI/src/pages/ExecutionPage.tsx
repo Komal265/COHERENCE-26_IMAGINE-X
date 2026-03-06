@@ -2,8 +2,7 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Brain, Mail, User, AlertCircle, Send, Mailbox, FileText,
-  Sparkles, Database, GitBranch, Laptop, Heart, ShoppingCart,
-  ChevronDown,
+  Sparkles, Database, ChevronDown,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,7 +14,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid } from "recharts";
 import { fetchLeads } from "@/lib/supabase-queries";
 
 interface Lead {
@@ -27,22 +26,6 @@ interface Lead {
   role: string | null;
   status: string;
 }
-
-type ClusterType = "IT" | "Healthcare" | "Ecommerce";
-
-// Assign lead to cluster based on company/industry
-function getCluster(lead: Lead): ClusterType {
-  const c = (lead.company || lead.industry || "").toLowerCase();
-  if (c.includes("health") || c.includes("med") || c.includes("care")) return "Healthcare";
-  if (c.includes("shop") || c.includes("store") || c.includes("ecom") || c.includes("retail")) return "Ecommerce";
-  return "IT";
-}
-
-const clusterConfig: Record<ClusterType, { label: string; icon: typeof Laptop; color: string }> = {
-  IT: { label: "IT Companies", icon: Laptop, color: "border-blue-400 bg-blue-50" },
-  Healthcare: { label: "Healthcare", icon: Heart, color: "border-rose-400 bg-rose-50" },
-  Ecommerce: { label: "Ecommerce", icon: ShoppingCart, color: "border-emerald-400 bg-emerald-50" },
-};
 
 // Flowing connection line
 function FlowingLine({ active = false }: { active?: boolean }) {
@@ -86,34 +69,8 @@ function Particle({ delay = 0, left = "20%", top = "30%" }: { delay?: number; le
   );
 }
 
-// Database particles flowing out toward clusters
-function DatabaseFlowOut({ active = false }: { active?: boolean }) {
-  if (!active) return null;
-  return (
-    <div className="absolute inset-0 pointer-events-none overflow-visible">
-      {Array.from({ length: 4 }).map((_, i) => (
-        <motion.div
-          key={i}
-          className="absolute right-0 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-primary/80"
-          initial={{ x: 0, opacity: 0 }}
-          animate={{
-            x: [0, 25, 50],
-            opacity: [0, 1, 0],
-          }}
-          transition={{
-            duration: 1,
-            repeat: Infinity,
-            delay: i * 0.25,
-            ease: "easeInOut",
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-// Cluster cards flowing into AI engine - mini cards travel along path
-function ClusterFlowIntoAI({ count = 5 }: { count?: number }) {
+// Leads flowing into AI engine
+function LeadsFlowIntoAI({ count = 5 }: { count?: number }) {
   return (
     <div className="absolute inset-0 pointer-events-none overflow-visible">
       {Array.from({ length: count }).map((_, i) => (
@@ -193,7 +150,7 @@ function AnimatedCounter({ value, duration = 1 }: { value: number; duration?: nu
 export default function ExecutionPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
-  const [phase, setPhase] = useState<"idle" | "clustering" | "clustered" | "generating" | "messages_ready" | "sending" | "complete">("idle");
+  const [phase, setPhase] = useState<"idle" | "generating" | "messages_ready" | "sending" | "complete">("idle");
   const [typingText, setTypingText] = useState("");
   const [generatedCount, setGeneratedCount] = useState(0);
   const [sentCount, setSentCount] = useState(0);
@@ -217,28 +174,10 @@ export default function ExecutionPage() {
 
   const displayLeads = leads.slice(0, 6);
   const totalCount = leads.length;
-  const clustered = phase !== "idle";
   const messagesReady = phase === "messages_ready" || phase === "sending" || phase === "complete";
 
-  // Group leads by cluster
-  const clusterGroups = displayLeads.reduce<Record<ClusterType, Lead[]>>(
-    (acc, lead) => {
-      const c = getCluster(lead);
-      if (!acc[c]) acc[c] = [];
-      acc[c].push(lead);
-      return acc;
-    },
-    { IT: [], Healthcare: [], Ecommerce: [] }
-  );
-
-  const handleClusterLeads = () => {
-    if (displayLeads.length === 0) return;
-    setPhase("clustering");
-    setTimeout(() => setPhase("clustered"), 2000);
-  };
-
   const handleGenerateMessages = () => {
-    if (displayLeads.length === 0 || phase !== "clustered") return;
+    if (displayLeads.length === 0) return;
     setPhase("generating");
     setTypingText("");
     setGeneratedCount(0);
@@ -257,10 +196,9 @@ export default function ExecutionPage() {
         let c = 0;
         const msgInterval = setInterval(() => {
           const lead = displayLeads[c];
-          const cluster = getCluster(lead);
           const sampleMsg = `Dear ${lead.name},
 
-I hope this message finds you well. I am reaching out to you today regarding ${lead.company || "your organization"}, which I understand operates within the ${cluster} sector. We have had the privilege of partnering with several distinguished organizations in your industry to enhance their outreach capabilities and streamline their communication workflows.
+I hope this message finds you well. I am reaching out to you today regarding ${lead.company || "your organization"}. We have had the privilege of partnering with several distinguished organizations to enhance their outreach capabilities and streamline their communication workflows.
 
 Our solution has consistently delivered measurable improvements in engagement rates and operational efficiency. I would be honoured to arrange a brief, no-obligation consultation at your convenience to explore how we might support ${lead.company || "your company"} in achieving similar results.
 
@@ -303,26 +241,18 @@ Kind regards`;
     setSentMessages([]);
   };
 
-  // Chart data for dashboard update
   const lineChartData = [
     { stage: "Leads", count: displayLeads.length },
-    { stage: "Clustered", count: phase !== "idle" ? displayLeads.length : 0 },
     { stage: "Generated", count: generatedCount },
     { stage: "Sent", count: sentCount },
     { stage: "Delivered", count: phase === "complete" ? sentCount : 0 },
-  ];
-
-  const barChartData = [
-    { cluster: "IT", count: clusterGroups.IT.length },
-    { cluster: "Healthcare", count: clusterGroups.Healthcare.length },
-    { cluster: "Ecommerce", count: clusterGroups.Ecommerce.length },
   ];
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       <div>
         <h1 className="text-2xl font-display font-bold text-foreground">Execution Monitor</h1>
-        <p className="text-sm text-muted-foreground mt-1">Visual pipeline: Database → Cluster → AI → Send</p>
+        <p className="text-sm text-muted-foreground mt-1">Visual pipeline: Leads → AI → Messages → Delivery</p>
       </div>
 
       {leads.length === 0 && !loading ? (
@@ -337,17 +267,8 @@ Kind regards`;
           {/* Action Buttons */}
           <div className="flex flex-wrap gap-3">
             <Button
-              onClick={handleClusterLeads}
-              disabled={phase !== "idle" || displayLeads.length === 0}
-              variant="outline"
-              className="rounded-xl gap-2"
-            >
-              <GitBranch className="h-4 w-4" />
-              Cluster Leads
-            </Button>
-            <Button
               onClick={handleGenerateMessages}
-              disabled={phase !== "clustered" || displayLeads.length === 0}
+              disabled={phase !== "idle" || displayLeads.length === 0}
               className="rounded-xl gap-2"
             >
               <Sparkles className="h-4 w-4" />
@@ -373,108 +294,45 @@ Kind regards`;
           <Card className="rounded-xl overflow-hidden border-2">
             <CardHeader className="bg-muted/30 border-b">
               <CardTitle className="text-lg font-display">Outreach Pipeline</CardTitle>
-              <CardDescription>Database → Cluster → AI Engine → Messages → Delivery</CardDescription>
+              <CardDescription>Leads → AI Engine → Messages → Delivery</CardDescription>
             </CardHeader>
             <CardContent className="p-6 overflow-x-auto">
-              <div className="flex items-stretch gap-3 min-h-[320px] min-w-[900px]">
-                {/* 1. Database */}
-                <div className="flex flex-col items-center w-32 shrink-0">
-                  <p className="text-xs font-medium text-muted-foreground mb-2">Database</p>
+              <div className="flex items-stretch gap-3 min-h-[320px] min-w-[700px]">
+                {/* 1. Leads */}
+                <div className="flex flex-col items-center w-40 shrink-0">
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Leads</p>
                   <motion.div
                     className={`relative w-full flex-1 min-h-[200px] rounded-xl border-2 flex flex-col items-center justify-center overflow-hidden ${
-                      phase === "clustering" ? "border-primary bg-primary/5 ring-2 ring-primary/30 shadow-lg" : "border-muted bg-muted/30"
+                      phase === "generating" ? "border-primary/50 bg-primary/5" : "border-muted bg-muted/30"
                     }`}
-                    animate={phase === "clustering" ? { boxShadow: ["0 0 0", "0 0 20px hsl(29 100% 50% / 0.3)", "0 0 0"] } : {}}
-                    transition={{ duration: 1.5, repeat: phase === "clustering" ? Infinity : 0 }}
                   >
-                    <Database className={`h-10 w-10 mb-1 ${phase === "clustering" ? "text-primary" : "text-muted-foreground"}`} />
+                    <Database className={`h-10 w-10 mb-1 ${phase === "generating" ? "text-primary" : "text-muted-foreground"}`} />
                     <span className="text-[10px] text-muted-foreground">{displayLeads.length} leads</span>
-                    {phase === "clustering" && (
-                      <>
-                        <Particle delay={0} left="20%" top="25%" />
-                        <Particle delay={0.3} left="70%" top="35%" />
-                        <Particle delay={0.6} left="45%" top="60%" />
-                      </>
-                    )}
+                    <div className="flex flex-wrap gap-1 justify-center mt-2 px-1">
+                      {displayLeads.slice(0, 4).map((lead) => (
+                        <motion.div
+                          key={lead.id}
+                          whileHover={{ scale: 1.05 }}
+                          className="flex items-center gap-1 p-1.5 rounded border bg-card/80"
+                        >
+                          <Avatar className="h-5 w-5">
+                            <AvatarFallback className="text-[8px] bg-primary/10 text-primary">
+                              {lead.name.slice(0, 2)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <span className="text-[9px] truncate max-w-[40px]">{lead.name}</span>
+                        </motion.div>
+                      ))}
+                    </div>
                   </motion.div>
                 </div>
 
                 <div className="relative flex items-center shrink-0 w-10">
-                  <FlowingLine active={clustered} />
-                  {phase === "clustering" && <DatabaseFlowOut active />}
-                </div>
-
-                {/* 2. Cluster Groups (branches) */}
-                <div className="flex flex-col items-center w-48 shrink-0">
-                  <p className="text-xs font-medium text-muted-foreground mb-2">Clusters</p>
-                  <div className="flex flex-col gap-2 flex-1 justify-center w-full">
-                    {(Object.entries(clusterGroups) as [ClusterType, Lead[]][]).map(([key, groupLeads], gi) => {
-                      if (groupLeads.length === 0) return null;
-                      const config = clusterConfig[key];
-                      const Icon = config.icon;
-                      return (
-                        <motion.div
-                          key={key}
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={
-                            clustered
-                              ? phase === "generating"
-                                ? { opacity: 0.6, x: [0, 8, 0], scale: [1, 0.98, 1] }
-                                : { opacity: 1, y: 0 }
-                              : {}
-                          }
-                          transition={{ delay: gi * 0.2, x: { duration: 2, repeat: phase === "generating" ? Infinity : 0 } }}
-                          className={`rounded-lg border-2 p-2 ${config.color}`}
-                        >
-                          <div className="flex items-center gap-1.5 mb-1">
-                            <Icon className="h-3.5 w-3.5" />
-                            <span className="text-[10px] font-semibold">{config.label}</span>
-                          </div>
-                          <div className="flex flex-wrap gap-1">
-                            {groupLeads.map((lead, li) => (
-                              <motion.div
-                                key={lead.id}
-                                layout
-                                initial={{ opacity: 0, scale: 0.8 }}
-                                animate={
-                                  clustered
-                                    ? phase === "generating"
-                                      ? {
-                                          opacity: [1, 0.8, 0.6],
-                                          x: [0, 8, 16],
-                                          scale: [1, 0.95, 0.9],
-                                        }
-                                      : { opacity: 1, scale: 1 }
-                                    : {}
-                                }
-                                transition={{
-                                  delay: phase === "generating" ? li * 0.2 : 0.3,
-                                  x: { duration: 2, repeat: phase === "generating" ? Infinity : 0 },
-                                }}
-                                whileHover={{ scale: 1.05, boxShadow: "0 2px 8px rgba(0,0,0,0.1)" }}
-                                className="flex items-center gap-1 p-1.5 rounded border bg-card/80 cursor-default"
-                              >
-                                <Avatar className="h-5 w-5">
-                                  <AvatarFallback className="text-[8px] bg-primary/10 text-primary">
-                                    {lead.name.slice(0, 2)}
-                                  </AvatarFallback>
-                                </Avatar>
-                                <span className="text-[9px] truncate max-w-[50px]">{lead.name}</span>
-                              </motion.div>
-                            ))}
-                          </div>
-                        </motion.div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="relative flex items-center shrink-0 w-10">
                   <FlowingLine active={phase === "generating" || messagesReady} />
-                  {phase === "generating" && <ClusterFlowIntoAI count={6} />}
+                  {phase === "generating" && <LeadsFlowIntoAI count={6} />}
                 </div>
 
-                {/* 3. AI Engine */}
+                {/* 2. AI Engine */}
                 <div className="flex flex-col items-center w-40 shrink-0">
                   <p className="text-xs font-medium text-muted-foreground mb-2">AI Engine</p>
                   <motion.div
@@ -510,13 +368,12 @@ Kind regards`;
                             />
                           ))}
                         </div>
-                        <p className="text-[9px] text-muted-foreground mt-1">Processing clusters...</p>
+                        <p className="text-[9px] text-muted-foreground mt-1">Processing...</p>
                         <Particle delay={0} left="25%" top="35%" />
                         <Particle delay={0.5} left="60%" top="45%" />
                       </>
                     )}
                     {phase === "idle" && <span className="text-[10px] text-muted-foreground">Ready</span>}
-                    {(phase === "clustering" || phase === "clustered") && <span className="text-[10px] text-muted-foreground">Awaiting</span>}
                     {messagesReady && <span className="text-[10px] text-success font-medium">Complete</span>}
                   </motion.div>
                 </div>
@@ -525,7 +382,7 @@ Kind regards`;
                   <FlowingLine active={messagesReady} />
                 </div>
 
-                {/* 4. Message Cards */}
+                {/* 3. Message Cards */}
                 <div className="flex flex-col items-center w-40 shrink-0">
                   <p className="text-xs font-medium text-muted-foreground mb-2">Messages</p>
                   <div className="flex flex-col gap-2 flex-1 justify-center w-full">
@@ -559,7 +416,7 @@ Kind regards`;
                   {phase === "sending" && <MessageFlowIntoEnvelope active />}
                 </div>
 
-                {/* 5. Envelopes */}
+                {/* 4. Envelopes */}
                 <div className="flex flex-col items-center w-28 shrink-0">
                   <p className="text-xs font-medium text-muted-foreground mb-2">Envelopes</p>
                   <div className="flex flex-col gap-1.5 flex-1 justify-center">
@@ -594,7 +451,7 @@ Kind regards`;
                   <FlowingLine active={phase === "complete"} />
                 </div>
 
-                {/* 6. Mailbox */}
+                {/* 5. Mailbox */}
                 <div className="flex flex-col items-center w-28 shrink-0">
                   <p className="text-xs font-medium text-muted-foreground mb-2">Mailbox</p>
                   <motion.div
@@ -632,7 +489,7 @@ Kind regards`;
             </CardContent>
           </Card>
 
-          {/* Step 5: Dashboard Update - shown when complete */}
+          {/* Dashboard Update - shown when complete */}
           <AnimatePresence>
             {phase === "complete" && (
               <motion.div
@@ -650,12 +507,11 @@ Kind regards`;
                     <CardDescription>Metrics updated after delivery</CardDescription>
                   </CardHeader>
                   <CardContent className="p-6">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
                       {[
                         { label: "Messages Sent", value: sentCount, color: "text-primary" },
                         { label: "Leads Reached", value: displayLeads.length, color: "text-blue-500" },
                         { label: "Conversion Rate", value: `${displayLeads.length > 0 ? ((sentCount / displayLeads.length) * 100).toFixed(0) : 0}%`, color: "text-violet-500" },
-                        { label: "Clusters Used", value: Object.values(clusterGroups).filter((g) => g.length > 0).length, color: "text-success" },
                       ].map((stat, i) => (
                         <motion.div
                           key={stat.label}
@@ -671,32 +527,18 @@ Kind regards`;
                         </motion.div>
                       ))}
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }}>
-                        <p className="text-sm font-medium mb-2">Pipeline Progress</p>
-                        <ChartContainer config={{ count: { color: "hsl(29, 100%, 50%)" } }} className="h-32">
-                          <LineChart data={lineChartData}>
-                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                            <XAxis dataKey="stage" tick={{ fontSize: 10 }} />
-                            <YAxis tick={{ fontSize: 10 }} />
-                            <ChartTooltip content={<ChartTooltipContent />} />
-                            <Line type="monotone" dataKey="count" stroke="hsl(29, 100%, 50%)" strokeWidth={2} dot={{ r: 4 }} />
-                          </LineChart>
-                        </ChartContainer>
-                      </motion.div>
-                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }}>
-                        <p className="text-sm font-medium mb-2">Leads by Cluster</p>
-                        <ChartContainer config={{ count: { color: "hsl(29, 100%, 50%)" } }} className="h-32">
-                          <BarChart data={barChartData} layout="vertical" margin={{ left: 0 }}>
-                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" horizontal={false} />
-                            <XAxis type="number" tick={{ fontSize: 10 }} />
-                            <YAxis type="category" dataKey="cluster" tick={{ fontSize: 10 }} width={80} />
-                            <ChartTooltip content={<ChartTooltipContent />} />
-                            <Bar dataKey="count" fill="hsl(29, 100%, 50%)" radius={[0, 4, 4, 0]} />
-                          </BarChart>
-                        </ChartContainer>
-                      </motion.div>
-                    </div>
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }}>
+                      <p className="text-sm font-medium mb-2">Pipeline Progress</p>
+                      <ChartContainer config={{ count: { color: "hsl(29, 100%, 50%)" } }} className="h-32">
+                        <LineChart data={lineChartData}>
+                          <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                          <XAxis dataKey="stage" tick={{ fontSize: 10 }} />
+                          <YAxis tick={{ fontSize: 10 }} />
+                          <ChartTooltip content={<ChartTooltipContent />} />
+                          <Line type="monotone" dataKey="count" stroke="hsl(29, 100%, 50%)" strokeWidth={2} dot={{ r: 4 }} />
+                        </LineChart>
+                      </ChartContainer>
+                    </motion.div>
                   </CardContent>
                 </Card>
               </motion.div>
@@ -756,11 +598,6 @@ Kind regards`;
               <CardContent>
                 <div className="space-y-3">
                   <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Clustered</span>
-                    <span className="font-medium">{clustered ? displayLeads.length : 0} / {displayLeads.length}</span>
-                  </div>
-                  <Progress value={clustered ? 100 : 0} className="h-2" />
-                  <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Messages generated</span>
                     <span className="font-medium">{generatedCount} / {displayLeads.length}</span>
                   </div>
@@ -795,7 +632,7 @@ Kind regards`;
                       </Avatar>
                       <div className="min-w-0 flex-1">
                         <p className="font-medium text-sm truncate">{lead.name}</p>
-                        <p className="text-[10px] text-muted-foreground truncate">{lead.company || "—"} · {getCluster(lead)}</p>
+                        <p className="text-[10px] text-muted-foreground truncate">{lead.company || "—"}</p>
                       </div>
                       <motion.div
                         className={`w-2 h-2 rounded-full shrink-0 ${["replied", "email_sent"].includes(lead.status) ? "bg-success" : "bg-muted"}`}

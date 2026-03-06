@@ -6,6 +6,7 @@ import {
   Panel, MarkerType,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { useTheme } from "next-themes";
 import {
   Upload, Brain, Mail, Linkedin, Clock, GitBranch, Filter, Split,
   Shield, Gauge, CheckSquare, FileText, RefreshCw, Send,
@@ -74,11 +75,19 @@ const nodeCategories = [
 ];
 
 const categoryColors: Record<string, string> = {
-  trigger: "border-primary bg-primary/5",
-  action: "border-blue-400 bg-blue-50",
-  logic: "border-violet-400 bg-violet-50",
-  control: "border-warning bg-warning/5",
-  output: "border-success bg-success/5",
+  trigger: "border-primary bg-primary/5 dark:bg-primary/20",
+  action: "border-blue-400 bg-blue-50 dark:border-blue-500 dark:bg-blue-900/40",
+  logic: "border-violet-400 bg-violet-50 dark:border-violet-500 dark:bg-violet-900/40",
+  control: "border-warning bg-warning/5 dark:bg-amber-900/40 dark:border-amber-500",
+  output: "border-success bg-success/5 dark:bg-emerald-900/40 dark:border-emerald-500",
+};
+
+const categoryIconColors: Record<string, string> = {
+  trigger: "text-primary",
+  action: "text-blue-600 dark:text-blue-400",
+  logic: "text-violet-600 dark:text-violet-400",
+  control: "text-amber-600 dark:text-amber-400",
+  output: "text-emerald-600 dark:text-emerald-400",
 };
 
 const edgeStyle = { stroke: "hsl(29, 100%, 50%)", strokeWidth: 2 };
@@ -95,6 +104,7 @@ const labelToIcon: Record<string, string> = {
 };
 
 export default function WorkflowPage() {
+  const { resolvedTheme } = useTheme();
   const [searchParams] = useSearchParams();
   const workflowId = searchParams.get("id");
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -417,10 +427,10 @@ export default function WorkflowPage() {
                 onDragStart={(e) => onDragStart(e, node)}
                 className={`flex items-center gap-2.5 p-2 rounded-lg border mb-1.5 cursor-grab active:cursor-grabbing hover:shadow-sm transition-shadow ${categoryColors[node.type]}`}
               >
-                <GripVertical className="h-3 w-3 text-muted-foreground/50 shrink-0" />
-                <node.icon className="h-4 w-4 shrink-0" />
+                <GripVertical className="h-3 w-3 text-muted-foreground shrink-0 dark:text-muted-foreground/80" />
+                <node.icon className={`h-4 w-4 shrink-0 ${categoryIconColors[node.type] || "text-foreground"}`} />
                 <div className="min-w-0">
-                  <p className="text-xs font-medium truncate">{node.label}</p>
+                  <p className="text-xs font-medium text-foreground truncate">{node.label}</p>
                   <p className="text-[10px] text-muted-foreground truncate">{node.desc}</p>
                 </div>
               </div>
@@ -441,7 +451,11 @@ export default function WorkflowPage() {
           fitView
           className="bg-background"
         >
-          <Background color="hsl(30, 20%, 85%)" gap={20} size={1} />
+          <Background
+            color={resolvedTheme === "dark" ? "hsl(20, 12%, 18%)" : "hsl(30, 20%, 85%)"}
+            gap={20}
+            size={1}
+          />
           <Controls />
           <MiniMap nodeStrokeColor="hsl(29, 100%, 50%)" nodeColor="hsl(29, 100%, 90%)" nodeBorderRadius={8} />
           <Panel position="top-right">

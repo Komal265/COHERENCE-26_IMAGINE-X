@@ -5,6 +5,7 @@ import {
   Play,
   Settings,
   Zap,
+  Inbox,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -28,6 +29,7 @@ const navItems = [
   { title: "Workflow", url: "/workflow", icon: GitBranch },
   { title: "Automation", url: "/automation", icon: Zap },
   { title: "Execution", url: "/execution", icon: Play },
+  { title: "Inbox", url: "/inbox", icon: Inbox },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 
@@ -37,7 +39,7 @@ export function AppSidebar() {
   const location = useLocation();
 
   return (
-    <Sidebar collapsible="icon" className="border-r border-sidebar-border">
+    <Sidebar collapsible="icon" className="border-r border-white/20 glass-card !rounded-none">
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-2.5">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary">

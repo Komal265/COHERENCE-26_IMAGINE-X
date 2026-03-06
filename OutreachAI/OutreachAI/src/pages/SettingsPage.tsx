@@ -1,11 +1,25 @@
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { toast } from "sonner";
+import { getFromEmail, setFromEmail } from "@/lib/edge-functions";
 
 export default function SettingsPage() {
+  const [fromEmail, setFromEmailValue] = useState(getFromEmail());
+
+  useEffect(() => {
+    setFromEmailValue(getFromEmail());
+  }, []);
+
+  const handleSaveFromEmail = () => {
+    setFromEmail(fromEmail);
+    toast.success("Sender email saved. Emails will now go to your leads when you use a verified domain.");
+  };
+
   return (
     <div className="p-6 space-y-6 max-w-3xl mx-auto">
       <div>
@@ -33,17 +47,33 @@ export default function SettingsPage() {
 
       <Card className="rounded-xl">
         <CardHeader>
-          <CardTitle className="text-lg font-display">API Keys</CardTitle>
-          <CardDescription>Manage integrations</CardDescription>
+          <CardTitle className="text-lg font-display">Email</CardTitle>
+          <CardDescription>Send to leads — no domain required if you use Gmail</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Label>OpenAI API Key</Label>
-            <Input type="password" defaultValue="sk-..." className="rounded-lg font-mono" />
+            <Label>Option A: Gmail (no domain needed)</Label>
+            <p className="text-xs text-muted-foreground">
+              Add to <code className="bg-muted px-1 rounded">.env</code>: <code className="bg-muted px-1 rounded">GMAIL_USER=your@gmail.com</code> and <code className="bg-muted px-1 rounded">GMAIL_APP_PASSWORD=your-16-char-app-password</code>. Enable 2-Step Verification, then create an App Password at{" "}
+              <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer" className="text-primary underline">myaccount.google.com/apppasswords</a>. Restart <code className="bg-muted px-1 rounded">npm run dev</code> after saving.
+            </p>
           </div>
           <div className="space-y-2">
-            <Label>SMTP Server</Label>
-            <Input defaultValue="smtp.sendgrid.net" className="rounded-lg" />
+            <Label>Option B: Resend (needs verified domain for leads)</Label>
+            <p className="text-xs text-muted-foreground">
+              Set <code className="bg-muted px-1 rounded">RESEND_API_KEY</code> in <code className="bg-muted px-1 rounded">.env</code>. To send to leads, verify a domain at{" "}
+              <a href="https://resend.com/domains" target="_blank" rel="noreferrer" className="text-primary underline">resend.com/domains</a> and set the sender below.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label>Sender (From) email — for Resend or display name with Gmail</Label>
+            <Input
+              value={fromEmail}
+              onChange={(e) => setFromEmailValue(e.target.value)}
+              placeholder="OutreachAI &lt;your@gmail.com&gt; or &lt;outreach@yourdomain.com&gt;"
+              className="rounded-lg font-mono"
+            />
+            <Button className="rounded-xl" onClick={handleSaveFromEmail}>Save sender email</Button>
           </div>
         </CardContent>
       </Card>

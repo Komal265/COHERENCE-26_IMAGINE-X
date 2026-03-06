@@ -4,11 +4,13 @@ import { motion } from "framer-motion";
 import {
   Upload, Brain, Mail, Linkedin, Clock, GitBranch, Filter, Split,
   Shield, Gauge, CheckSquare, FileText, RefreshCw, Send, Zap,
+  MessageSquare, BarChart3, Reply,
 } from "lucide-react";
 
 const iconMap: Record<string, React.ElementType> = {
   Upload, Brain, Mail, Linkedin, Clock, GitBranch, Filter, Split,
   Shield, Gauge, CheckSquare, FileText, RefreshCw, Send, Zap,
+  MessageSquare, BarChart3, Reply,
 };
 
 const categoryBorders: Record<string, string> = {

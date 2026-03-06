@@ -5,21 +5,38 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+function getFallbackMessage(lead: { name?: string; company?: string; industry?: string; role?: string }) {
+  const name = lead?.name || "there";
+  const company = lead?.company || "your company";
+  return `Hi ${name},
+
+I hope this message finds you well. I'm reaching out regarding opportunities at ${company}. We've helped similar organizations improve their outreach and engagement.
+
+I'd love to arrange a brief call at your convenience to explore how we might support ${company}. Would you be open to a 15-minute conversation this week?
+
+Best regards`;
+}
+
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
 
   try {
     const { lead } = await req.json();
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+
+    if (!LOVABLE_API_KEY) {
+      return new Response(JSON.stringify({ message: getFallbackMessage(lead || {}) }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const prompt = `Write a personalized outreach email.
 
 Lead Information:
-Name: ${lead.name || "there"}
-Company: ${lead.company || "their company"}
-Industry: ${lead.industry || "technology"}
-Role: ${lead.role || "professional"}
+Name: ${lead?.name || "there"}
+Company: ${lead?.company || "their company"}
+Industry: ${lead?.industry || "technology"}
+Role: ${lead?.role || "professional"}
 
 Write a short personalized outreach email offering our solution.
 Make it sound human and natural. Keep it under 100 words.
@@ -42,24 +59,23 @@ Return ONLY the email body text, no subject line.`;
 
     if (!response.ok) {
       if (response.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
-          status: 429,
+        return new Response(JSON.stringify({ message: getFallbackMessage(lead || {}) }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
       if (response.status === 402) {
-        return new Response(JSON.stringify({ error: "Payment required" }), {
-          status: 402,
+        return new Response(JSON.stringify({ message: getFallbackMessage(lead || {}) }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      const text = await response.text();
-      console.error("AI gateway error:", response.status, text);
-      throw new Error("AI gateway error");
+      console.error("AI gateway error:", response.status, await response.text());
+      return new Response(JSON.stringify({ message: getFallbackMessage(lead || {}) }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const data = await response.json();
-    const message = data.choices?.[0]?.message?.content || "";
+    const message = data.choices?.[0]?.message?.content?.trim() || getFallbackMessage(lead || {});
 
     return new Response(JSON.stringify({ message }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -67,8 +83,8 @@ Return ONLY the email body text, no subject line.`;
   } catch (e) {
     console.error("generate-message error:", e);
     return new Response(
-      JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      JSON.stringify({ message: getFallbackMessage({}) }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });

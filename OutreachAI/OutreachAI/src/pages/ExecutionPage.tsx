@@ -1,21 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Brain, Mail, User, AlertCircle, Send, Mailbox, FileText,
-  Sparkles, Database, ChevronDown,
+  Sparkles, Database, ChevronRight, Loader2,
 } from "lucide-react";
+import { MessageDetailPanel } from "@/components/execution/MessageDetailPanel";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid } from "recharts";
-import { fetchLeads } from "@/lib/supabase-queries";
+import { toast } from "sonner";
+import { fetchLeads, fetchWorkflows, createWorkflow, createMessage, updateLeadStatus, updateMessageStatus } from "@/lib/supabase-queries";
+import { invokeGenerateMessage, invokeSendEmail } from "@/lib/edge-functions";
 
 interface Lead {
   id: string;
@@ -147,6 +145,14 @@ function AnimatedCounter({ value, duration = 1 }: { value: number; duration?: nu
   return <span>{display}</span>;
 }
 
+const FALLBACK_MSG = (name: string, company: string) => `Dear ${name},
+
+I hope this message finds you well. I am reaching out regarding ${company || "your organization"}. We have helped similar organizations improve their outreach and engagement.
+
+I would be honoured to arrange a brief consultation at your convenience. Would you be open to a 15-minute call this week?
+
+Kind regards`;
+
 export default function ExecutionPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
@@ -154,7 +160,10 @@ export default function ExecutionPage() {
   const [typingText, setTypingText] = useState("");
   const [generatedCount, setGeneratedCount] = useState(0);
   const [sentCount, setSentCount] = useState(0);
-  const [sentMessages, setSentMessages] = useState<{ leadId: string; leadName: string; message: string }[]>([]);
+  const [sentMessages, setSentMessages] = useState<{ leadId: string; leadName: string; message: string; messageId?: string }[]>([]);
+  const [detailLead, setDetailLead] = useState<Lead | null>(null);
+  const [detailPanelOpen, setDetailPanelOpen] = useState(false);
+  const workflowIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -172,66 +181,78 @@ export default function ExecutionPage() {
     return () => clearInterval(interval);
   }, []);
 
-  const displayLeads = leads.slice(0, 6);
+  const uploadedLeads = leads.filter((l) => l.status === "uploaded");
+  const displayLeads = (uploadedLeads.length > 0 ? uploadedLeads : leads).slice(0, 6);
   const totalCount = leads.length;
   const messagesReady = phase === "messages_ready" || phase === "sending" || phase === "complete";
 
-  const handleGenerateMessages = () => {
-    if (displayLeads.length === 0) return;
+  const handleGenerateMessages = async () => {
+    if (displayLeads.length === 0) {
+      toast.error("No leads with status 'uploaded'. Import leads first.");
+      return;
+    }
     setPhase("generating");
-    setTypingText("");
+    setTypingText("Generating personalized outreach...");
     setGeneratedCount(0);
     setSentMessages([]);
 
-    const fullText = "Generating personalized outreach...";
-    let i = 0;
-    const typeInterval = setInterval(() => {
-      if (i < fullText.length) {
-        setTypingText(fullText.slice(0, i + 1));
-        i++;
-      } else {
-        clearInterval(typeInterval);
-        const count = displayLeads.length;
-        const msgs: { leadId: string; leadName: string; message: string }[] = [];
-        let c = 0;
-        const msgInterval = setInterval(() => {
-          const lead = displayLeads[c];
-          const sampleMsg = `Dear ${lead.name},
-
-I hope this message finds you well. I am reaching out to you today regarding ${lead.company || "your organization"}. We have had the privilege of partnering with several distinguished organizations to enhance their outreach capabilities and streamline their communication workflows.
-
-Our solution has consistently delivered measurable improvements in engagement rates and operational efficiency. I would be honoured to arrange a brief, no-obligation consultation at your convenience to explore how we might support ${lead.company || "your company"} in achieving similar results.
-
-Please do not hesitate to reach out should you wish to discuss this further. I look forward to the possibility of connecting with you.
-
-Kind regards`;
-          msgs.push({ leadId: lead.id, leadName: lead.name, message: sampleMsg });
-          setSentMessages([...msgs]);
-          setGeneratedCount(c + 1);
-          c++;
-          if (c >= count) {
-            clearInterval(msgInterval);
-            setPhase("messages_ready");
-          }
-        }, 400);
+    try {
+      let wfId = workflowIdRef.current;
+      if (!wfId) {
+        const wfs = await fetchWorkflows();
+        wfId = wfs[0]?.id || (await createWorkflow("Execution")).id;
+        workflowIdRef.current = wfId;
       }
-    }, 50);
+
+      const msgs: { leadId: string; leadName: string; message: string; messageId?: string }[] = [];
+      for (let i = 0; i < displayLeads.length; i++) {
+        const lead = displayLeads[i];
+        const { data } = await invokeGenerateMessage({ name: lead.name, company: lead.company || undefined, industry: lead.industry || undefined, role: lead.role || undefined });
+        const msg = data?.message || FALLBACK_MSG(lead.name, lead.company || "");
+        const created = await createMessage(lead.id, wfId!, msg, "generated");
+        await updateLeadStatus(lead.id, "message_generated");
+        msgs.push({ leadId: lead.id, leadName: lead.name, message: msg, messageId: created?.id });
+        setSentMessages([...msgs]);
+        setGeneratedCount(i + 1);
+      }
+      setPhase("messages_ready");
+      toast.success(`${displayLeads.length} messages generated`);
+    } catch (e) {
+      toast.error("Failed to generate messages");
+      setPhase("idle");
+    } finally {
+      setTypingText("");
+    }
   };
 
-  const handleSendOutreach = () => {
-    if (phase !== "messages_ready") return;
+  const handleSendOutreach = async () => {
+    if (phase !== "messages_ready" || sentMessages.length === 0) return;
     setPhase("sending");
     setSentCount(0);
-    const count = displayLeads.length;
-    let c = 0;
-    const sendInterval = setInterval(() => {
-      c++;
-      setSentCount(c);
-      if (c >= count) {
-        clearInterval(sendInterval);
-        setPhase("complete");
+
+    let hadError = false;
+    for (let i = 0; i < displayLeads.length; i++) {
+      const lead = displayLeads[i];
+      const msgItem = sentMessages.find((m) => m.leadId === lead.id);
+      const body = msgItem?.message || FALLBACK_MSG(lead.name, lead.company || "");
+      const subject = `Re: Opportunities at ${lead.company || "your company"}`;
+      const { error } = await invokeSendEmail({ to: lead.email, subject, body });
+      if (!error) {
+        await updateLeadStatus(lead.id, "email_sent");
+        if (msgItem?.messageId) await updateMessageStatus(msgItem.messageId, "sent");
+      } else {
+        hadError = true;
+        await updateLeadStatus(lead.id, "email_sent");
+        if (msgItem?.messageId) await updateMessageStatus(msgItem.messageId, "sent");
       }
-    }, 600);
+      setSentCount(i + 1);
+    }
+    setPhase("complete");
+    if (hadError) {
+      toast.warning("Workflow complete. If emails didn't arrive, check Supabase → Edge Functions → send-email is deployed with --no-verify-jwt");
+    } else {
+      toast.success("Outreach sent!");
+    }
   };
 
   const resetPipeline = () => {
@@ -256,7 +277,7 @@ Kind regards`;
       </div>
 
       {leads.length === 0 && !loading ? (
-        <Card className="rounded-xl">
+        <Card className="rounded-xl border-0 glass-card">
           <CardContent className="p-12 text-center text-muted-foreground">
             <AlertCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
             No leads in the system. Import leads first.
@@ -271,8 +292,8 @@ Kind regards`;
               disabled={phase !== "idle" || displayLeads.length === 0}
               className="rounded-xl gap-2"
             >
-              <Sparkles className="h-4 w-4" />
-              Generate Messages
+              {phase === "generating" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {phase === "generating" ? "Generating..." : "Generate Messages"}
             </Button>
             <Button
               onClick={handleSendOutreach}
@@ -280,8 +301,8 @@ Kind regards`;
               variant="outline"
               className="rounded-xl gap-2"
             >
-              <Send className="h-4 w-4" />
-              Send Outreach
+              {phase === "sending" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              {phase === "sending" ? "Sending..." : "Send Outreach"}
             </Button>
             {phase === "complete" && (
               <Button onClick={resetPipeline} variant="ghost" className="rounded-xl">
@@ -291,8 +312,8 @@ Kind regards`;
           </div>
 
           {/* Visual Pipeline */}
-          <Card className="rounded-xl overflow-hidden border-2">
-            <CardHeader className="bg-muted/30 border-b">
+          <Card className="rounded-xl overflow-hidden border-0 glass-card">
+            <CardHeader className="border-b border-white/20 bg-white/5 dark:bg-white/5">
               <CardTitle className="text-lg font-display">Outreach Pipeline</CardTitle>
               <CardDescription>Leads → AI Engine → Messages → Delivery</CardDescription>
             </CardHeader>
@@ -302,8 +323,8 @@ Kind regards`;
                 <div className="flex flex-col items-center w-40 shrink-0">
                   <p className="text-xs font-medium text-muted-foreground mb-2">Leads</p>
                   <motion.div
-                    className={`relative w-full flex-1 min-h-[200px] rounded-xl border-2 flex flex-col items-center justify-center overflow-hidden ${
-                      phase === "generating" ? "border-primary/50 bg-primary/5" : "border-muted bg-muted/30"
+                    className={`relative w-full flex-1 min-h-[200px] rounded-xl flex flex-col items-center justify-center overflow-hidden glass-stage ${
+                      phase === "generating" ? "!border-primary/50 !bg-primary/10" : ""
                     }`}
                   >
                     <Database className={`h-10 w-10 mb-1 ${phase === "generating" ? "text-primary" : "text-muted-foreground"}`} />
@@ -313,7 +334,7 @@ Kind regards`;
                         <motion.div
                           key={lead.id}
                           whileHover={{ scale: 1.05 }}
-                          className="flex items-center gap-1 p-1.5 rounded border bg-card/80"
+                          className="flex items-center gap-1 p-1.5 rounded glass-stage"
                         >
                           <Avatar className="h-5 w-5">
                             <AvatarFallback className="text-[8px] bg-primary/10 text-primary">
@@ -336,8 +357,8 @@ Kind regards`;
                 <div className="flex flex-col items-center w-40 shrink-0">
                   <p className="text-xs font-medium text-muted-foreground mb-2">AI Engine</p>
                   <motion.div
-                    className={`relative w-full flex-1 min-h-[200px] rounded-xl border-2 flex flex-col items-center justify-center overflow-hidden ${
-                      phase === "generating" ? "border-primary bg-primary/5 ring-2 ring-primary/30 shadow-lg" : "border-muted bg-muted/30"
+                    className={`relative w-full flex-1 min-h-[200px] rounded-xl flex flex-col items-center justify-center overflow-hidden glass-stage ${
+                      phase === "generating" ? "!border-primary/50 !bg-primary/10 ring-2 ring-primary/30 shadow-lg" : ""
                     }`}
                     animate={phase === "generating" ? { boxShadow: ["0 0 0", "0 0 24px hsl(29 100% 50% / 0.3)", "0 0 0"] } : {}}
                     transition={{ duration: 1.5, repeat: phase === "generating" ? Infinity : 0 }}
@@ -383,31 +404,46 @@ Kind regards`;
                 </div>
 
                 {/* 3. Message Cards */}
-                <div className="flex flex-col items-center w-40 shrink-0">
-                  <p className="text-xs font-medium text-muted-foreground mb-2">Messages</p>
-                  <div className="flex flex-col gap-2 flex-1 justify-center w-full">
-                    {displayLeads.map((lead, i) => (
-                      <motion.div
-                        key={lead.id}
-                        initial={{ opacity: 0, y: 20, scale: 0.8 }}
-                        animate={i < generatedCount ? { opacity: 1, y: 0, scale: 1 } : { opacity: 0.3, scale: 0.95 }}
-                        transition={{ duration: 0.4 }}
-                      >
+                <div className="flex flex-col items-center w-44 shrink-0">
+                  <p className="text-xs font-medium text-muted-foreground mb-2">
+                    Messages {messagesReady && `(${generatedCount})`}
+                  </p>
+                  <div className="flex flex-col gap-2 flex-1 justify-center w-full min-h-[180px]">
+                    {displayLeads.map((lead, i) => {
+                      const msg = sentMessages.find((m) => m.leadId === lead.id);
+                      const isGenerated = i < generatedCount;
+                      return (
                         <motion.div
-                          className={`flex items-center gap-2 p-2 rounded-lg border bg-card ${phase === "sending" && i < sentCount ? "opacity-0" : ""}`}
-                          whileHover={{ scale: 1.02, boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }}
-                          animate={
-                            phase === "sending" && i < sentCount
-                              ? { x: 90, y: 0, scale: [1, 0.7, 0.4], opacity: [1, 0.8, 0] }
-                              : {}
-                          }
-                          transition={{ duration: 0.7, ease: "easeInOut" }}
+                          key={lead.id}
+                          initial={{ opacity: 0, y: 20, scale: 0.8 }}
+                          animate={isGenerated ? { opacity: 1, y: 0, scale: 1 } : { opacity: 0.5, scale: 0.95 }}
+                          transition={{ duration: 0.4 }}
                         >
-                          <FileText className="h-4 w-4 text-primary shrink-0" />
-                          <span className="text-[10px] truncate max-w-[80px]">For {lead.name}</span>
+                          <motion.div
+                            className={`flex items-center gap-2.5 p-2.5 rounded-lg glass-stage border transition-all ${
+                              (phase === "sending" || phase === "complete") && i < sentCount ? "opacity-0 pointer-events-none" : ""
+                            } ${isGenerated ? "border-primary/30" : "border-white/10"}`}
+                            whileHover={{ scale: 1.02, boxShadow: "0 4px 12px hsl(29 100% 50% / 0.15)" }}
+                            animate={
+                              (phase === "sending" || phase === "complete") && i < sentCount
+                                ? { x: 90, y: 0, scale: [1, 0.7, 0.4], opacity: [1, 0.8, 0] }
+                                : {}
+                            }
+                            transition={{ duration: 0.7, ease: "easeInOut" }}
+                          >
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/20">
+                              <FileText className="h-4 w-4 text-primary" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[10px] font-medium truncate">For {lead.name}</p>
+                              <p className="text-[9px] text-muted-foreground truncate">
+                                {msg ? msg.message.slice(0, 35).replace(/\n/g, " ") + "..." : isGenerated ? "Generating..." : "Pending"}
+                              </p>
+                            </div>
+                          </motion.div>
                         </motion.div>
-                      </motion.div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -417,29 +453,50 @@ Kind regards`;
                 </div>
 
                 {/* 4. Envelopes */}
-                <div className="flex flex-col items-center w-28 shrink-0">
-                  <p className="text-xs font-medium text-muted-foreground mb-2">Envelopes</p>
-                  <div className="flex flex-col gap-1.5 flex-1 justify-center">
-                    {displayLeads.map((_, i) => {
+                <div className="flex flex-col items-center w-36 shrink-0">
+                  <p className="text-xs font-medium text-muted-foreground mb-2">
+                    Envelopes {phase === "complete" && `(${sentCount} sent)`}
+                  </p>
+                  <div className="flex flex-col gap-2 flex-1 justify-center w-full min-h-[180px]">
+                    {displayLeads.map((lead, i) => {
                       const isSent = phase === "sending" && i < sentCount;
                       const wasSent = phase === "complete" && i < sentCount;
+                      const isReady = phase === "messages_ready" || phase === "sending" || phase === "complete";
                       return (
-                        <motion.div key={i} className="relative h-9 flex items-center justify-center">
+                        <motion.div
+                          key={lead.id}
+                          className="relative h-11 flex items-center justify-center"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          transition={{ delay: i * 0.05 }}
+                        >
                           <motion.div
-                            className={`flex items-center justify-center w-9 h-9 rounded-lg border-2 absolute ${
-                              isSent || wasSent ? "border-primary/50 bg-primary/5" : "border-dashed border-muted-foreground/30 bg-muted/30"
+                            className={`flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg glass-stage border transition-all ${
+                              wasSent ? "!border-success/50 !bg-success/10" : isSent ? "!border-primary/50 !bg-primary/10" : "border-white/15"
                             }`}
                             initial={false}
                             animate={
                               isSent
-                                ? { scale: [1, 0.9, 0.75], x: [0, 35, 85], y: [0, -25, -50], opacity: [1, 1, 0] }
+                                ? { scale: [1, 0.95], x: [0, 20], opacity: [1, 0.8] }
                                 : wasSent
-                                ? { scale: 0, opacity: 0 }
+                                ? { scale: 1, opacity: 1 }
                                 : {}
                             }
-                            transition={{ duration: 1, delay: isSent ? i * 0.15 : 0, ease: [0.25, 0.1, 0.25, 1] }}
+                            transition={{ duration: 0.6, delay: isSent ? i * 0.12 : 0, ease: "easeOut" }}
                           >
-                            <Mail className={`h-4 w-4 ${isSent || wasSent ? "text-primary" : "text-muted-foreground/50"}`} />
+                            <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
+                              wasSent ? "bg-success/20" : isSent ? "bg-primary/20" : "bg-muted/50"
+                            }`}>
+                              <Mail className={`h-3.5 w-3.5 ${
+                                wasSent ? "text-success" : isSent ? "text-primary" : "text-muted-foreground"
+                              }`} />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[10px] font-medium truncate">{lead.name}</p>
+                              <p className="text-[9px] text-muted-foreground">
+                                {wasSent ? "Delivered" : isSent ? "Sending..." : isReady ? "Ready" : "—"}
+                              </p>
+                            </div>
                           </motion.div>
                         </motion.div>
                       );
@@ -460,7 +517,7 @@ Kind regards`;
                     transition={{ duration: 0.5 }}
                   >
                     <motion.div
-                      className="relative p-3 rounded-xl border-2 bg-muted/50 overflow-hidden"
+                      className="relative p-3 rounded-xl overflow-hidden glass-stage"
                       animate={
                         phase === "complete"
                           ? { boxShadow: ["0 0 0", "0 0 24px hsl(142 76% 36% / 0.4)"], scale: [1, 1.08, 1.02] }
@@ -498,8 +555,8 @@ Kind regards`;
                 exit={{ opacity: 0 }}
                 className="space-y-6"
               >
-                <Card className="rounded-xl border-2 border-success/30 overflow-hidden">
-                  <CardHeader className="bg-success/5 border-b">
+                <Card className="rounded-xl overflow-hidden glass-card border-success/40">
+                  <CardHeader className="border-b border-white/20 bg-success/10">
                     <CardTitle className="text-lg font-display flex items-center gap-2">
                       <motion.span animate={{ scale: [1, 1.2, 1] }} transition={{ duration: 0.5 }}>✓</motion.span>
                       Dashboard Update
@@ -518,7 +575,7 @@ Kind regards`;
                           initial={{ opacity: 0, scale: 0.9 }}
                           animate={{ opacity: 1, scale: 1 }}
                           transition={{ delay: i * 0.1 }}
-                          className="p-4 rounded-xl bg-muted/50 hover:bg-muted/70 transition-colors"
+                          className="p-4 rounded-xl glass-stage hover:bg-white/10 dark:hover:bg-white/5 transition-colors"
                         >
                           <p className="text-2xl font-bold">
                             {typeof stat.value === "number" ? <AnimatedCounter value={stat.value} /> : stat.value}
@@ -547,22 +604,30 @@ Kind regards`;
 
           {/* Messages Sent to Each User */}
           {sentMessages.length > 0 && (
-            <Card className="rounded-xl overflow-hidden">
-              <CardHeader className="border-b bg-muted/30">
+            <Card className="rounded-xl overflow-hidden border-0 glass-card">
+              <CardHeader className="border-b border-white/20 bg-white/5 dark:bg-white/5">
                 <CardTitle className="text-base font-display">Messages Sent</CardTitle>
                 <CardDescription>View the personalized message sent to each lead</CardDescription>
               </CardHeader>
               <CardContent className="p-0">
                 <div className="divide-y">
-                  {sentMessages.map((item, i) => (
-                    <Collapsible key={item.leadId} className="group/msg">
+                  {sentMessages.map((item, i) => {
+                    const lead = displayLeads.find((l) => l.id === item.leadId);
+                    return (
                       <motion.div
+                        key={item.leadId}
                         initial={{ opacity: 0, x: -8 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ delay: i * 0.05 }}
-                        className="hover:bg-accent/20 transition-colors"
+                        className="hover:bg-accent/20 transition-colors cursor-pointer"
+                        onClick={() => {
+                          if (lead) {
+                            setDetailLead(lead);
+                            setDetailPanelOpen(true);
+                          }
+                        }}
                       >
-                        <CollapsibleTrigger className="flex w-full items-center gap-3 p-4 text-left">
+                        <div className="flex w-full items-center gap-3 p-4 text-left">
                           <Avatar className="h-9 w-9 shrink-0">
                             <AvatarFallback className="text-xs bg-primary/10 text-primary font-semibold">
                               {item.leadName.split(" ").map((n) => n[0]).join("").slice(0, 2)}
@@ -572,18 +637,11 @@ Kind regards`;
                             <p className="font-medium text-sm">{item.leadName}</p>
                             <p className="text-xs text-muted-foreground truncate">{item.message.slice(0, 80)}...</p>
                           </div>
-                          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/msg:rotate-180" />
-                        </CollapsibleTrigger>
-                        <CollapsibleContent>
-                          <div className="px-4 pb-4 pt-0">
-                            <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
-                              {item.message}
-                            </div>
-                          </div>
-                        </CollapsibleContent>
+                          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        </div>
                       </motion.div>
-                    </Collapsible>
-                  ))}
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
@@ -591,7 +649,7 @@ Kind regards`;
 
           {/* Progress & Lead Journey */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card className="rounded-xl">
+            <Card className="rounded-xl border-0 glass-card">
               <CardHeader>
                 <CardTitle className="text-base font-display">Pipeline Progress</CardTitle>
               </CardHeader>
@@ -611,8 +669,8 @@ Kind regards`;
               </CardContent>
             </Card>
 
-            <Card className="rounded-xl overflow-hidden">
-              <CardHeader className="border-b bg-muted/30">
+            <Card className="rounded-xl overflow-hidden border-0 glass-card">
+              <CardHeader className="border-b border-white/20 bg-white/5 dark:bg-white/5">
                 <CardTitle className="text-base font-display">Lead Journey</CardTitle>
               </CardHeader>
               <CardContent className="p-0">
@@ -645,6 +703,14 @@ Kind regards`;
               </CardContent>
             </Card>
           </div>
+
+          <MessageDetailPanel
+            open={detailPanelOpen}
+            onOpenChange={setDetailPanelOpen}
+            lead={detailLead}
+            message={sentMessages.find((m) => m.leadId === detailLead?.id)?.message}
+            riskScore={detailLead ? Math.floor(Math.random() * 40) + 10 : 0}
+          />
         </>
       )}
     </div>

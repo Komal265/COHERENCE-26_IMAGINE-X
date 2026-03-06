@@ -14,7 +14,15 @@ const funnelStages = [
 ];
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState({ totalLeads: 0, totalMessages: 0, sentMessages: 0, repliedLeads: 0, conversionRate: "0.0" });
+  const [stats, setStats] = useState({
+    totalLeads: 0,
+    totalMessages: 0,
+    sentMessages: 0,
+    repliedLeads: 0,
+    conversionRate: "0.0",
+    repliesReceived: 0,
+    followupsSent: 0,
+  });
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [failedCount, setFailedCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -43,7 +51,8 @@ export default function DashboardPage() {
     { label: "Leads Imported", value: stats.totalLeads, icon: Users, color: "text-primary" },
     { label: "Messages Generated", value: stats.totalMessages, icon: MessageSquare, color: "text-blue-500" },
     { label: "Messages Sent", value: stats.sentMessages, icon: Send, color: "text-violet-500" },
-    { label: "Replies Received", value: stats.repliedLeads, icon: Reply, color: "text-success" },
+    { label: "Replies Received", value: stats.repliesReceived || stats.repliedLeads, icon: Reply, color: "text-success" },
+    { label: "Follow-ups Sent", value: stats.followupsSent, icon: Send, color: "text-violet-500" },
     { label: "Conversion Rate", value: `${stats.conversionRate}%`, icon: TrendingUp, color: "text-primary" },
   ];
 
@@ -73,10 +82,10 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {statCards.map((stat, i) => (
           <motion.div key={stat.label} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}>
-            <Card className="rounded-xl">
+            <Card className="rounded-xl border-0 glass-card">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between mb-2">
                   <stat.icon className={`h-4 w-4 ${stat.color}`} />
@@ -92,7 +101,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Lead Funnel */}
         <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
-          <Card className="rounded-xl">
+          <Card className="rounded-xl border-0 glass-card">
             <CardHeader>
               <CardTitle className="text-lg font-display">Lead Progression Funnel</CardTitle>
             </CardHeader>
@@ -124,34 +133,34 @@ export default function DashboardPage() {
 
         {/* System Health */}
         <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
-          <Card className="rounded-xl">
+          <Card className="rounded-xl border-0 glass-card">
             <CardHeader>
               <CardTitle className="text-lg font-display">System Health</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 gap-4">
-                <div className="flex items-center gap-3 p-3 rounded-xl bg-accent/50">
+                <div className="flex items-center gap-3 p-3 rounded-xl glass-stage">
                   <Activity className="h-4 w-4 text-success" />
                   <div>
                     <p className="text-xs text-muted-foreground">Status</p>
                     <Badge className="bg-success/10 text-success border-0 text-xs mt-0.5">Online</Badge>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 p-3 rounded-xl bg-accent/50">
+                <div className="flex items-center gap-3 p-3 rounded-xl glass-stage">
                   <Layers className="h-4 w-4 text-primary" />
                   <div>
                     <p className="text-xs text-muted-foreground">Total Leads</p>
                     <p className="text-sm font-semibold">{stats.totalLeads}</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 p-3 rounded-xl bg-accent/50">
+                <div className="flex items-center gap-3 p-3 rounded-xl glass-stage">
                   <AlertTriangle className="h-4 w-4 text-warning" />
                   <div>
                     <p className="text-xs text-muted-foreground">Pending</p>
                     <p className="text-sm font-semibold">{statusCounts.uploaded || 0}</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 p-3 rounded-xl bg-accent/50">
+                <div className="flex items-center gap-3 p-3 rounded-xl glass-stage">
                   <XCircle className="h-4 w-4 text-destructive" />
                   <div>
                     <p className="text-xs text-muted-foreground">Failed</p>

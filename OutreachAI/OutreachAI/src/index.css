@@ -1,8 +1,8 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Space+Grotesk:wght@300..700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Space+Grotesk:wght@300..700&display=swap');
 
 @layer base {
   :root {
@@ -125,6 +125,78 @@
 .react-flow__controls-button {
   border: none !important;
   border-bottom: 1px solid hsl(var(--border)) !important;
+}
+
+/* Glass-SaaS / Glassmorphism utilities - strong translucent glass effect */
+.glass-card {
+  background: rgba(255, 255, 255, 0.08) !important;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.25) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+}
+
+.dark .glass-card {
+  background: rgba(15, 23, 42, 0.25) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.glass-modal {
+  background: rgba(255, 255, 255, 0.08) !important;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.25) !important;
+}
+
+.dark .glass-modal {
+  background: rgba(15, 23, 42, 0.3) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Inner pipeline stage boxes - frosted glass */
+.glass-stage {
+  background: rgba(255, 255, 255, 0.05) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+}
+
+.dark .glass-stage {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Sidebar inner content - inherit glass from parent */
+.glass-card [data-sidebar="sidebar"] {
+  background: transparent !important;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+/* Mesh gradient background - visible glow behind containers */
+.mesh-gradient-bg {
+  position: relative;
+  overflow: hidden;
+}
+
+.mesh-gradient-bg::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(ellipse 100% 80% at 50% -10%, hsl(29 100% 50% / 0.35), transparent 50%),
+    radial-gradient(ellipse 80% 60% at 100% 20%, hsl(262 83% 58% / 0.28), transparent 45%),
+    radial-gradient(ellipse 70% 50% at 0% 70%, hsl(142 76% 36% / 0.22), transparent 40%);
+  pointer-events: none;
+}
+
+.dark .mesh-gradient-bg::before {
+  background:
+    radial-gradient(ellipse 100% 80% at 50% -10%, hsl(29 100% 50% / 0.25), transparent 50%),
+    radial-gradient(ellipse 80% 60% at 100% 20%, hsl(262 83% 58% / 0.2), transparent 45%),
+    radial-gradient(ellipse 70% 50% at 0% 70%, hsl(142 76% 36% / 0.18), transparent 40%);
 }
 
 @layer utilities {

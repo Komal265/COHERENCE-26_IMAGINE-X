@@ -11,6 +11,7 @@ import {
   Upload, Brain, Mail, Linkedin, Clock, GitBranch, Filter, Split,
   Shield, Gauge, CheckSquare, FileText, RefreshCw, Send,
   Play, GripVertical, Zap, Save, Sparkles, Loader2,
+  MessageSquare, BarChart3, Reply,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,12 +24,17 @@ import {
 import { toast } from "sonner";
 import { useSearchParams } from "react-router-dom";
 import WorkflowNode from "@/components/workflow/WorkflowNode";
+import { RAGOverlay } from "@/components/workflow/RAGOverlay";
+import { MessageForgeModal } from "@/components/workflow/MessageForgeModal";
+import { SendingOverlay } from "@/components/execution/SendingOverlay";
 import {
   fetchWorkflowNodes, fetchWorkflowEdges,
   saveWorkflowNodes, saveWorkflowEdges,
   createWorkflow, fetchLeads, createExecutionLog,
-  updateLeadStatus, createMessage,
+  updateLeadStatus, updateLeadWorkflow, createMessage, updateMessageStatus,
+  fetchLatestMessageForLead, fetchMessageById,
 } from "@/lib/supabase-queries";
+import { invokeGenerateMessage, invokeSendEmail } from "@/lib/edge-functions";
 import { supabase } from "@/integrations/supabase/client";
 
 const nodeCategories = [
@@ -46,6 +52,9 @@ const nodeCategories = [
       { type: "action", label: "Send Email", icon: Mail, iconName: "Mail", desc: "Send via email" },
       { type: "action", label: "Send LinkedIn", icon: Linkedin, iconName: "Linkedin", desc: "Send LinkedIn message" },
       { type: "action", label: "Wait Delay", icon: Clock, iconName: "Clock", desc: "Human-like delay" },
+      { type: "action", label: "Reply Received", icon: MessageSquare, iconName: "MessageSquare", desc: "Trigger when lead replies" },
+      { type: "action", label: "Reply Analyzer", icon: BarChart3, iconName: "BarChart3", desc: "AI tone analysis of reply" },
+      { type: "action", label: "Generate Follow-Up", icon: Reply, iconName: "Reply", desc: "AI smart follow-up suggestion" },
     ],
   },
   {
@@ -98,6 +107,7 @@ const nodeTypes: NodeTypes = { workflowNode: WorkflowNode };
 const labelToIcon: Record<string, string> = {
   "Lead Upload": "Upload", "New Lead Added": "Zap",
   "AI Generate Message": "Brain", "Send Email": "Mail", "Send LinkedIn": "Linkedin", "Wait Delay": "Clock",
+  "Reply Received": "MessageSquare", "Reply Analyzer": "BarChart3", "Generate Follow-Up": "Reply",
   "Condition": "GitBranch", "Lead Filter": "Filter", "A/B Split": "Split",
   "Throttling Guard": "Shield", "Rate Limit": "Gauge", "Compliance Check": "CheckSquare",
   "Log Event": "FileText", "Update Status": "RefreshCw", "Send to CRM": "Send",
@@ -114,6 +124,12 @@ export default function WorkflowPage() {
   const [aiPrompt, setAiPrompt] = useState("");
   const [isGeneratingWorkflow, setIsGeneratingWorkflow] = useState(false);
   const [showAiPanel, setShowAiPanel] = useState(false);
+  const [ragOpen, setRagOpen] = useState(false);
+  const [forgeOpen, setForgeOpen] = useState(false);
+  const [sendingOpen, setSendingOpen] = useState(false);
+  const [executionLeads, setExecutionLeads] = useState<any[]>([]);
+  const [sendingIndex, setSendingIndex] = useState(0);
+  const [forgeLead, setForgeLead] = useState<any>(null);
   const nodeIdCounter = useRef(1);
   const nodeIdMap = useRef<Map<string, string>>(new Map()); // DB id -> flow id
 
@@ -237,33 +253,41 @@ export default function WorkflowPage() {
     }
   };
 
-  // Run workflow execution
-  const runWorkflow = async () => {
-    if (!workflowId) {
-      toast.error("Save the workflow first");
-      return;
+  // Phase 1 complete: show Message Forge modal
+  const onRAGComplete = () => {
+    setRagOpen(false);
+    if (executionLeads.length > 0) {
+      setForgeLead(executionLeads[0]);
+      setForgeOpen(true);
+    } else {
+      startActualExecution();
     }
+  };
+
+  // Phase 2 complete: start sending with overlay
+  const onForgeApprove = (_subject: string, _body: string) => {
+    setForgeOpen(false);
+    setForgeLead(null);
+    startActualExecution();
+  };
+
+  // Phase 3 & 4: Run actual execution with Sending overlay
+  const startActualExecution = async () => {
+    if (!workflowId || executionLeads.length === 0) return;
+    setSendingOpen(true);
+    setSendingIndex(0);
     setIsRunning(true);
+
     try {
-      const leads = await fetchLeads(workflowId);
-      if (leads.length === 0) {
-        // Try all leads without workflow assignment
-        const allLeads = await fetchLeads();
-        if (allLeads.length === 0) {
-          toast.error("No leads found. Import leads first.");
-          setIsRunning(false);
-          return;
-        }
-        // Use all uploaded leads
-        leads.push(...allLeads.filter((l) => l.status === "uploaded"));
-      }
-
       const nodeIds = nodes.map((n) => n.id);
+      const leadCount = Math.min(executionLeads.length, 10);
 
-      for (let li = 0; li < Math.min(leads.length, 10); li++) {
-        const lead = leads[li];
+      for (let li = 0; li < leadCount; li++) {
+        setSendingIndex(li);
+        const lead = executionLeads[li];
+        let lastMessageId: string | null = null;
+
         for (let ni = 0; ni < nodeIds.length; ni++) {
-          // Highlight active node
           setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, isActive: n.id === nodeIds[ni] } })));
 
           const nodeData = nodes[ni]?.data;
@@ -276,48 +300,159 @@ export default function WorkflowPage() {
             status: "started",
           });
 
-          // Process based on node type
           if (nodeLabel.includes("AI")) {
             await updateLeadStatus(lead.id, "message_generated");
-            // Call AI edge function if available
-            try {
-              const { data: aiData } = await supabase.functions.invoke("generate-message", {
-                body: { lead: { name: lead.name, company: lead.company, industry: lead.industry, role: lead.role } },
-              });
-              if (aiData?.message) {
-                await createMessage(lead.id, workflowId, aiData.message, "generated");
-              }
-            } catch {
-              // AI not set up yet, create placeholder
-              await createMessage(lead.id, workflowId, `Hi ${lead.name}, I'd love to connect about opportunities at ${lead.company || "your company"}.`, "generated");
-            }
+            const fallbackMsg = `Hi ${lead.name},\n\nI hope this message finds you well. I'm reaching out regarding opportunities at ${lead.company || "your company"}. We've helped similar organizations improve their outreach and engagement.\n\nI'd love to arrange a brief call at your convenience. Would you be open to a 15-minute conversation this week?\n\nBest regards`;
+            const { data: aiData } = await invokeGenerateMessage({ name: lead.name, company: lead.company, industry: lead.industry, role: lead.role });
+            const msg = aiData?.message
+              ? await createMessage(lead.id, workflowId, aiData.message, "generated")
+              : await createMessage(lead.id, workflowId, fallbackMsg, "generated");
+            lastMessageId = msg?.id ?? null;
           } else if (nodeLabel.includes("Wait") || nodeLabel.includes("Delay")) {
             await updateLeadStatus(lead.id, "waiting_delay");
-            await new Promise((r) => setTimeout(r, 2000)); // 2s simulated delay
+            await new Promise((r) => setTimeout(r, 1500));
           } else if (nodeLabel.includes("Email")) {
+            const msgId = lastMessageId ?? (await fetchLatestMessageForLead(lead.id, workflowId))?.id;
+            const body = msgId ? (await fetchMessageById(msgId).catch(() => null))?.generated_message : null;
+            const emailBody = body || `Hi ${lead.name}, I'd love to connect about opportunities at ${lead.company || "your company"}.`;
+            const subject = `Re: Opportunities at ${lead.company || "your company"}`;
+            const { data: sendData, error: sendErr } = await invokeSendEmail({ to: lead.email, subject, body: emailBody });
+            if (!sendErr && !sendData?.error) {
+              await updateLeadStatus(lead.id, "email_sent");
+              if (msgId) await updateMessageStatus(msgId, "sent");
+              await createExecutionLog({ lead_id: lead.id, workflow_id: workflowId, node_type: nodeLabel, status: "completed" });
+            } else {
+              toast.error(`Failed to send email to ${lead.email}: ${sendErr || sendData?.error || "Unknown error"}`);
+              await createExecutionLog({ lead_id: lead.id, workflow_id: workflowId, node_type: nodeLabel, status: "failed" });
+            }
+          } else if (nodeLabel.includes("LinkedIn")) {
             await updateLeadStatus(lead.id, "email_sent");
-          } else if (nodeLabel.includes("Update")) {
-            // Already updated above
+            const msgId = lastMessageId ?? (await fetchLatestMessageForLead(lead.id, workflowId))?.id;
+            if (msgId) await updateMessageStatus(msgId, "sent");
           }
 
-          await createExecutionLog({
-            lead_id: lead.id,
-            workflow_id: workflowId,
-            node_type: nodeLabel,
-            status: "completed",
-          });
+          if (!nodeLabel.includes("Email")) {
+            await createExecutionLog({
+              lead_id: lead.id,
+              workflow_id: workflowId,
+              node_type: nodeLabel,
+              status: "completed",
+            });
+          }
 
-          await new Promise((r) => setTimeout(r, 800));
+          await new Promise((r) => setTimeout(r, 600));
         }
       }
 
+      setSendingIndex(leadCount);
+      await new Promise((r) => setTimeout(r, 600));
+      setSendingOpen(false);
+      setExecutionLeads([]);
       setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, isActive: false } })));
-      toast.success("Workflow execution complete!");
+      toast.success("Workflow execution complete! Check Inbox for replies.");
     } catch (err: any) {
+      setSendingOpen(false);
+      setExecutionLeads([]);
       toast.error("Execution failed: " + (err.message || "Unknown error"));
     } finally {
       setIsRunning(false);
     }
+  };
+
+  // Run workflow execution - starts with Phase 1 (RAG)
+  const runWorkflow = async () => {
+    if (!workflowId) {
+      toast.error("Save the workflow first");
+      return;
+    }
+    try {
+      let leads = await fetchLeads(workflowId);
+      if (leads.length === 0) {
+        const allLeads = await fetchLeads();
+        if (allLeads.length === 0) {
+          toast.error("No leads found. Import leads first.");
+          return;
+        }
+        leads = allLeads.filter((l) => l.status === "uploaded");
+      }
+
+      const toProcess = leads.slice(0, 10);
+      if (toProcess.length === 0) {
+        toast.error("No leads to process.");
+        return;
+      }
+      for (const lead of toProcess) {
+        await updateLeadWorkflow(lead.id, workflowId);
+      }
+      setExecutionLeads(toProcess);
+      setRagOpen(true);
+    } catch (err: any) {
+      toast.error("Failed to load leads: " + (err.message || "Unknown error"));
+    }
+  };
+
+  const buildFlowFromNodes = (
+    aiNodes: Array<{ label: string; type: string; icon?: string; desc: string }>,
+    aiEdges: Array<[number, number]>
+  ) => {
+    const NODE_WIDTH = 220;
+    const flowNodes: Node[] = aiNodes.map((n, i) => ({
+      id: String(nodeIdCounter.current++),
+      type: "workflowNode",
+      position: { x: i * (NODE_WIDTH + 60), y: 100 },
+      data: {
+        label: n.label,
+        icon: n.icon || labelToIcon[n.label] || "Zap",
+        category: n.type,
+        desc: n.desc || "",
+      },
+    }));
+    const flowEdges: Edge[] = (aiEdges || []).map(([src, tgt]) => ({
+      id: `e-${src}-${tgt}`,
+      source: flowNodes[src]?.id || "",
+      target: flowNodes[tgt]?.id || "",
+      animated: true,
+      style: edgeStyle,
+      markerEnd: edgeMarker,
+    })).filter((e) => e.source && e.target);
+    setNodes(flowNodes);
+    setEdges(flowEdges);
+    setAiPrompt("");
+    setShowAiPanel(false);
+    toast.success("Workflow generated! Save to persist.");
+  };
+
+  const getDefaultWorkflowFromPrompt = (prompt: string): { nodes: Array<{ label: string; type: string; icon: string; desc: string }>; edges: [number, number][] } => {
+    const p = prompt.toLowerCase();
+    if (p.includes("linkedin") && !p.includes("email")) {
+      return {
+        nodes: [
+          { label: "Lead Upload", type: "trigger", icon: "Upload", desc: "Start when leads imported" },
+          { label: "AI Generate Message", type: "action", icon: "Brain", desc: "Generate personalized outreach" },
+          { label: "Send LinkedIn", type: "action", icon: "Linkedin", desc: "Send LinkedIn message" },
+        ],
+        edges: [[0, 1], [1, 2]],
+      };
+    }
+    if (p.includes("delay") || p.includes("wait") || p.includes("between")) {
+      return {
+        nodes: [
+          { label: "Lead Upload", type: "trigger", icon: "Upload", desc: "Start when leads imported" },
+          { label: "AI Generate Message", type: "action", icon: "Brain", desc: "Generate personalized outreach" },
+          { label: "Wait Delay", type: "action", icon: "Clock", desc: "Human-like delay" },
+          { label: "Send Email", type: "action", icon: "Mail", desc: "Send via email" },
+        ],
+        edges: [[0, 1], [1, 2], [2, 3]],
+      };
+    }
+    return {
+      nodes: [
+        { label: "Lead Upload", type: "trigger", icon: "Upload", desc: "Start when leads imported" },
+        { label: "AI Generate Message", type: "action", icon: "Brain", desc: "Generate personalized outreach" },
+        { label: "Send Email", type: "action", icon: "Mail", desc: "Send via email" },
+      ],
+      edges: [[0, 1], [1, 2]],
+    };
   };
 
   const generateWorkflowFromPrompt = async () => {
@@ -330,49 +465,17 @@ export default function WorkflowPage() {
       const { data, error } = await supabase.functions.invoke("generate-workflow", {
         body: { prompt: aiPrompt.trim() },
       });
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
 
-      const { nodes: aiNodes, edges: aiEdges } = data as {
-        nodes: Array<{ label: string; type: string; icon?: string; desc: string }>;
-        edges: Array<[number, number]>;
-      };
-
-      if (!aiNodes?.length) {
-        toast.error("AI returned no nodes. Try a different prompt.");
+      if (!error && data && !data.error && data.nodes?.length) {
+        buildFlowFromNodes(data.nodes, (data.edges || []) as [number, number][]);
         return;
       }
 
-      const NODE_WIDTH = 220;
-      const NODE_HEIGHT = 80;
-      const flowNodes: Node[] = aiNodes.map((n, i) => ({
-        id: String(nodeIdCounter.current++),
-        type: "workflowNode",
-        position: { x: i * (NODE_WIDTH + 60), y: 100 },
-        data: {
-          label: n.label,
-          icon: n.icon || labelToIcon[n.label] || "Zap",
-          category: n.type,
-          desc: n.desc || "",
-        },
-      }));
-
-      const flowEdges: Edge[] = (aiEdges || []).map(([src, tgt]) => ({
-        id: `e-${src}-${tgt}`,
-        source: flowNodes[src]?.id || "",
-        target: flowNodes[tgt]?.id || "",
-        animated: true,
-        style: edgeStyle,
-        markerEnd: edgeMarker,
-      })).filter((e) => e.source && e.target);
-
-      setNodes(flowNodes);
-      setEdges(flowEdges);
-      setAiPrompt("");
-      setShowAiPanel(false);
-      toast.success("Workflow generated! Save to persist.");
-    } catch (err: any) {
-      toast.error("Generation failed: " + (err.message || "Unknown error"));
+      const fallback = getDefaultWorkflowFromPrompt(aiPrompt.trim());
+      buildFlowFromNodes(fallback.nodes, fallback.edges);
+    } catch {
+      const fallback = getDefaultWorkflowFromPrompt(aiPrompt.trim());
+      buildFlowFromNodes(fallback.nodes, fallback.edges);
     } finally {
       setIsGeneratingWorkflow(false);
     }
@@ -380,8 +483,22 @@ export default function WorkflowPage() {
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)]">
+      <RAGOverlay open={ragOpen} onComplete={onRAGComplete} duration={3500} />
+      <MessageForgeModal
+        open={forgeOpen}
+        onClose={() => { setForgeOpen(false); setForgeLead(null); setExecutionLeads([]); setIsRunning(false); }}
+        onApprove={onForgeApprove}
+        lead={forgeLead}
+        isHighValue={forgeLead && (forgeLead.company?.toLowerCase().includes("inc") || (forgeLead.role?.toLowerCase() || "").includes("ceo"))}
+      />
+      <SendingOverlay
+        open={sendingOpen}
+        leads={executionLeads}
+        currentIndex={sendingIndex}
+        onComplete={() => {}}
+      />
       {/* Left Sidebar */}
-      <div className="w-64 border-r border-border bg-card overflow-y-auto p-3 shrink-0">
+      <div className="w-64 border-r border-white/20 overflow-y-auto p-3 shrink-0 glass-card !rounded-none">
         <Collapsible open={showAiPanel} onOpenChange={setShowAiPanel}>
           <CollapsibleTrigger asChild>
             <Button variant="outline" className="w-full mb-3 rounded-xl justify-start gap-2 bg-primary/5 border-primary/30 hover:bg-primary/10">

@@ -10,6 +10,7 @@ import LeadsPage from "./pages/LeadsPage";
 import WorkflowPage from "./pages/WorkflowPage";
 import AutomationPage from "./pages/AutomationPage";
 import ExecutionPage from "./pages/ExecutionPage";
+import InboxPage from "./pages/InboxPage";
 import SettingsPage from "./pages/SettingsPage";
 import NotFound from "./pages/NotFound";
 
@@ -30,6 +31,7 @@ const App = () => (
             <Route path="/workflow" element={<WorkflowPage />} />
             <Route path="/automation" element={<AutomationPage />} />
             <Route path="/execution" element={<ExecutionPage />} />
+            <Route path="/inbox" element={<InboxPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

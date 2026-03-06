@@ -195,7 +195,8 @@ export default function LeadsPage() {
                 <p className="text-sm font-medium text-foreground">
                   {isDragActive ? "Drop your file here" : "Drag & drop CSV file"}
                 </p>
-                <p className="text-xs text-muted-foreground mt-1">or click to browse · requires name and email columns</p>
+                <p className="text-xs text-muted-foreground mt-1">or click to browse · requires Name, Email (Company, Industry, Role optional)</p>
+                <a href="/sample_leads.csv" download="leads_template.csv" className="text-xs text-primary hover:underline mt-1 inline-block" onClick={(e) => e.stopPropagation()}>Download sample CSV</a>
               </motion.div>
             )}
           </AnimatePresence>

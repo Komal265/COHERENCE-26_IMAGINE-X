@@ -1,7 +1,10 @@
-project_id = "ijjawvqwvcpsjetjkyau"
+project_id = "mrsulagepjpcmmlhswsa"
 
 [functions.generate-message]
 verify_jwt = false
 
 [functions.generate-workflow]
+verify_jwt = false
+
+[functions.send-email]
 verify_jwt = false

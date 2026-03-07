@@ -52,18 +52,7 @@ export function sendEmailPlugin(): Plugin {
             const supabase = createClient(supabaseUrl, supabaseKey);
             const { data: leads } = await supabase.from("leads").select("id, email").not("email", "is", null);
             const leadByEmail = new Map<string, { id: string }>((leads || []).map((l: { id: string; email: string }) => [l.email.toLowerCase().trim(), l]));
-            const { data: unreplied } = await supabase
-              .from("messages")
-              .select("id, lead_id, created_at")
-              .is("reply_text", null)
-              .in("status", ["sent", "replied", "followup_sent"])
-              .order("created_at", { ascending: true });
-            const leadToMessage = new Map<string, string>();
-            for (const m of unreplied || []) {
-              const key = (m as { lead_id: string }).lead_id;
-              if (!leadToMessage.has(key)) leadToMessage.set(key, (m as { id: string }).id);
-            }
-            const ImapFlow = (await import("imapflow")).default;
+            const { ImapFlow } = await import("imapflow");
             const { simpleParser } = await import("mailparser");
             const client = new ImapFlow({ host: "imap.gmail.com", port: 993, secure: true, auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD }, logger: false });
             await client.connect();
@@ -72,28 +61,48 @@ export function sendEmailPlugin(): Plugin {
               const lock = await client.getMailboxLock("INBOX");
               try {
                 const uids = await client.search({ since: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }, { uid: true });
-                if (uids.length > 0) {
-                  const list = client.fetch(uids, { envelope: true, source: true }, { uid: true });
+                const uidList = Array.isArray(uids) ? uids : [];
+                if (uidList.length > 0) {
+                  const list = client.fetch(uidList, { envelope: true, source: true }, { uid: true });
+                  const repliesByLead: Array<{ leadId: string; text: string; date: Date }> = [];
                   for await (const msg of list) {
-                  const raw = msg.source?.toString();
-                  if (!raw) continue;
-                  const parsed = await simpleParser(raw);
-                  const from = parsed.from?.value?.[0]?.address?.toLowerCase?.() || "";
-                  const lead = leadByEmail.get(from);
-                  if (!lead) continue;
-                  const messageId = leadToMessage.get(lead.id);
-                  if (!messageId) continue;
-                  const text = (parsed.text || parsed.html || "").replace(/<[^>]+>/g, " ").trim().slice(0, 10000);
-                  const tone = classifyTone(text);
-                  const { error } = await supabase
-                    .from("messages")
-                    .update({ reply_text: text, reply_tone: tone, reply_received_at: new Date().toISOString(), status: "replied" })
-                    .eq("id", messageId);
-                  if (!error) {
-                    updated++;
-                    leadToMessage.delete(lead.id);
+                    const raw = msg.source?.toString();
+                    if (!raw) continue;
+                    const parsed = await simpleParser(raw);
+                    const from = parsed.from?.value?.[0]?.address?.toLowerCase?.() || "";
+                    const lead = leadByEmail.get(from);
+                    if (!lead) continue;
+                    const text = (parsed.text || parsed.html || "").replace(/<[^>]+>/g, " ").trim().slice(0, 10000);
+                    const date = parsed.date || new Date();
+                    repliesByLead.push({ leadId: lead.id, text, date });
                   }
-                }
+                  const newestPerLead = new Map<string, { text: string; date: Date }>();
+                  for (const r of repliesByLead) {
+                    const existing = newestPerLead.get(r.leadId);
+                    if (!existing || r.date > existing.date) newestPerLead.set(r.leadId, { text: r.text, date: r.date });
+                  }
+                  for (const [leadId, { text, date }] of newestPerLead) {
+                    const { data: latestMessages } = await supabase
+                      .from("messages")
+                      .select("id")
+                      .eq("lead_id", leadId)
+                      .in("status", ["sent", "replied", "followup_sent"])
+                      .order("created_at", { ascending: false })
+                      .limit(1);
+                    const latestMessage = latestMessages?.[0];
+                    if (!latestMessage?.id) continue;
+                    const tone = classifyTone(text);
+                    const { error } = await supabase
+                      .from("messages")
+                      .update({
+                        reply_text: text,
+                        reply_tone: tone,
+                        reply_received_at: date.toISOString(),
+                        status: "replied",
+                      })
+                      .eq("id", latestMessage.id);
+                    if (!error) updated++;
+                  }
                 }
               } finally {
                 lock.release();
@@ -103,6 +112,65 @@ export function sendEmailPlugin(): Plugin {
             }
             res.statusCode = 200;
             res.end(JSON.stringify({ ok: true, updated }));
+          } catch (e) {
+            res.statusCode = 500;
+            res.end(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }));
+          }
+          return;
+        }
+        if (url === "/api/process-auto-follow-ups" && (req.method === "POST" || req.method === "GET")) {
+          res.setHeader("Access-Control-Allow-Origin", "*");
+          res.setHeader("Content-Type", "application/json");
+          const env = loadEnv(server.config.mode, process.cwd(), "");
+          const supabaseUrl = env.VITE_SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+          const supabaseKey = env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+          if (!supabaseUrl || !supabaseKey) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error: "Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in .env" }));
+            return;
+          }
+          try {
+            const { createClient } = await import("@supabase/supabase-js");
+            const supabase = createClient(supabaseUrl, supabaseKey);
+            const now = new Date().toISOString();
+            const { data: rows } = await supabase
+              .from("messages")
+              .select("id, lead_id, generated_message, leads (id, name, email, company)")
+              .eq("status", "sent")
+              .is("reply_text", null)
+              .not("follow_up_after", "is", null)
+              .lte("follow_up_after", now)
+              .is("auto_follow_up_sent_at", null);
+            const port = server.config.server?.port ?? 8080;
+            const base = `http://127.0.0.1:${port}`;
+            let sent = 0;
+            for (const row of rows || []) {
+              const r = row as { id: string; lead_id: string; generated_message: string | null; leads: { id: string; name: string; email: string; company: string | null } | null };
+              const lead = r.leads;
+              if (!lead?.email) continue;
+              const name = lead.name || "there";
+              const company = lead.company || "your company";
+              const followupBody = `Hi ${name},\n\nI wanted to follow up on my previous message about ${company}. Would you have a few minutes to connect this week?\n\nBest`;
+              const subject = `Following up – ${company}`;
+              const sendRes = await fetch(`${base}/api/send-email`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ to: lead.email, subject, body: followupBody }),
+              });
+              const sendData = await sendRes.json().catch(() => ({}));
+              if (!sendRes.ok || sendData?.error) continue;
+              const { error: upErr } = await supabase
+                .from("messages")
+                .update({
+                  status: "followup_sent",
+                  followup_message: followupBody,
+                  auto_follow_up_sent_at: new Date().toISOString(),
+                } as Record<string, unknown>)
+                .eq("id", r.id);
+              if (!upErr) sent++;
+            }
+            res.statusCode = 200;
+            res.end(JSON.stringify({ ok: true, sent }));
           } catch (e) {
             res.statusCode = 500;
             res.end(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }));

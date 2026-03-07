@@ -101,6 +101,55 @@ export async function updateMessageStatus(id: string, status: string) {
   if (error) throw error;
 }
 
+/** 3 hours in ms; jitter 5–6 minutes in ms */
+const FOLLOW_UP_DELAY_MS = 3 * 60 * 60 * 1000;
+const JITTER_MIN_MS = 5 * 60 * 1000;
+const JITTER_EXTRA_MS = 1 * 60 * 1000; // 5 + random(0,1) min
+
+/** Call when first email is sent: sets status to 'sent' and schedule auto follow-up at now + 3h + 5–6 min jitter */
+export async function updateMessageSentWithFollowUpSchedule(messageId: string) {
+  const followUpAfter = new Date(Date.now() + FOLLOW_UP_DELAY_MS + JITTER_MIN_MS + Math.random() * JITTER_EXTRA_MS).toISOString();
+  const { error } = await supabase
+    .from("messages")
+    .update({ status: "sent", follow_up_after: followUpAfter } as any)
+    .eq("id", messageId);
+  if (error) throw error;
+}
+
+/** Messages with no reply that are past follow_up_after and not yet sent auto follow-up */
+export async function fetchMessagesEligibleForAutoFollowUp() {
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("messages")
+    .select(`
+      id,
+      lead_id,
+      generated_message,
+      follow_up_after,
+      leads (id, name, email, company)
+    `)
+    .eq("status", "sent")
+    .is("reply_text", null)
+    .not("follow_up_after", "is", null)
+    .lte("follow_up_after", now)
+    .is("auto_follow_up_sent_at", null);
+  if (error) throw error;
+  return data || [];
+}
+
+/** Mark that the automatic follow-up was sent (so we don't send again) */
+export async function markAutoFollowUpSent(messageId: string, followupMessage: string) {
+  const { error } = await supabase
+    .from("messages")
+    .update({
+      status: "followup_sent",
+      followup_message: followupMessage,
+      auto_follow_up_sent_at: new Date().toISOString(),
+    } as any)
+    .eq("id", messageId);
+  if (error) throw error;
+}
+
 export async function fetchLatestMessageForLead(leadId: string, workflowId: string) {
   const { data, error } = await supabase
     .from("messages")
@@ -152,6 +201,26 @@ export async function fetchInboxSentMessages() {
     `)
     .in("status", ["sent", "replied", "followup_sent"])
     .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+/** Fetch messages that are sent, have no reply yet, and have a scheduled auto follow-up (for Inbox countdown) */
+export async function fetchPendingFollowUpMessages() {
+  const { data, error } = await supabase
+    .from("messages")
+    .select(`
+      id,
+      lead_id,
+      follow_up_after,
+      created_at,
+      leads (id, name, email, company)
+    `)
+    .eq("status", "sent")
+    .is("reply_text", null)
+    .not("follow_up_after", "is", null)
+    .is("auto_follow_up_sent_at", null)
+    .order("follow_up_after", { ascending: true });
   if (error) throw error;
   return data || [];
 }

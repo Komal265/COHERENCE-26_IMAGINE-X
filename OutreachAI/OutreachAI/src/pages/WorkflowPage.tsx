@@ -31,7 +31,7 @@ import {
   fetchWorkflowNodes, fetchWorkflowEdges,
   saveWorkflowNodes, saveWorkflowEdges,
   createWorkflow, fetchLeads, createExecutionLog,
-  updateLeadStatus, updateLeadWorkflow, createMessage, updateMessageStatus,
+  updateLeadStatus, updateLeadWorkflow, createMessage, updateMessageStatus, updateMessageSentWithFollowUpSchedule,
   fetchLatestMessageForLead, fetchMessageById,
 } from "@/lib/supabase-queries";
 import { invokeGenerateMessage, invokeSendEmail } from "@/lib/edge-functions";
@@ -319,7 +319,7 @@ export default function WorkflowPage() {
             const { data: sendData, error: sendErr } = await invokeSendEmail({ to: lead.email, subject, body: emailBody });
             if (!sendErr && !sendData?.error) {
               await updateLeadStatus(lead.id, "email_sent");
-              if (msgId) await updateMessageStatus(msgId, "sent");
+              if (msgId) await updateMessageSentWithFollowUpSchedule(msgId);
               await createExecutionLog({ lead_id: lead.id, workflow_id: workflowId, node_type: nodeLabel, status: "completed" });
             } else {
               toast.error(`Failed to send email to ${lead.email}: ${sendErr || sendData?.error || "Unknown error"}`);
@@ -328,7 +328,7 @@ export default function WorkflowPage() {
           } else if (nodeLabel.includes("LinkedIn")) {
             await updateLeadStatus(lead.id, "email_sent");
             const msgId = lastMessageId ?? (await fetchLatestMessageForLead(lead.id, workflowId))?.id;
-            if (msgId) await updateMessageStatus(msgId, "sent");
+            if (msgId) await updateMessageSentWithFollowUpSchedule(msgId);
           }
 
           if (!nodeLabel.includes("Email")) {

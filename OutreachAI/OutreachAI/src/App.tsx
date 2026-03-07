@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -16,6 +17,24 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
+const FIVE_MIN_MS = 5 * 60 * 1000;
+
+function AutoFollowUpPoller() {
+  useEffect(() => {
+    const run = async () => {
+      try {
+        await fetch(`${window.location.origin}/api/process-auto-follow-ups`, { method: "POST" });
+      } catch {
+        // ignore
+      }
+    };
+    run();
+    const t = setInterval(run, FIVE_MIN_MS);
+    return () => clearInterval(t);
+  }, []);
+  return null;
+}
+
 const App = () => (
   <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
     <QueryClientProvider client={queryClient}>
@@ -23,6 +42,7 @@ const App = () => (
         <Toaster />
         <Sonner />
         <BrowserRouter>
+        <AutoFollowUpPoller />
         <AppLayout>
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />

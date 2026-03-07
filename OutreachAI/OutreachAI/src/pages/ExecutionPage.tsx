@@ -12,7 +12,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid } from "recharts";
 import { toast } from "sonner";
-import { fetchLeads, fetchWorkflows, createWorkflow, createMessage, updateLeadStatus, updateMessageStatus } from "@/lib/supabase-queries";
+import { fetchLeads, fetchWorkflows, createWorkflow, createMessage, updateLeadStatus, updateMessageSentWithFollowUpSchedule } from "@/lib/supabase-queries";
 import { invokeGenerateMessage, invokeSendEmail } from "@/lib/edge-functions";
 
 interface Lead {
@@ -239,11 +239,11 @@ export default function ExecutionPage() {
       const { error } = await invokeSendEmail({ to: lead.email, subject, body });
       if (!error) {
         await updateLeadStatus(lead.id, "email_sent");
-        if (msgItem?.messageId) await updateMessageStatus(msgItem.messageId, "sent");
+        if (msgItem?.messageId) await updateMessageSentWithFollowUpSchedule(msgItem.messageId);
       } else {
         hadError = true;
         await updateLeadStatus(lead.id, "email_sent");
-        if (msgItem?.messageId) await updateMessageStatus(msgItem.messageId, "sent");
+        if (msgItem?.messageId) await updateMessageSentWithFollowUpSchedule(msgItem.messageId);
       }
       setSentCount(i + 1);
     }

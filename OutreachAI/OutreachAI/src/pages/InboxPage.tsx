@@ -6,12 +6,12 @@ import {
   ThumbsUp,
   ThumbsDown,
   Minus,
-  Mail,
   Send,
   RefreshCw,
   Edit3,
   Loader2,
   ChevronRight,
+  Clock,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "sonner";
 import {
   fetchMessagesWithReplies,
+  fetchPendingFollowUpMessages,
   updateMessageReply,
   markMessageRead,
   updateMessageFollowupSent,
@@ -75,6 +76,30 @@ function classifyToneClient(text: string): "positive" | "neutral" | "negative" {
   return "neutral";
 }
 
+interface PendingFollowUp {
+  id: string;
+  lead_id: string;
+  follow_up_after: string | null;
+  created_at?: string;
+  leads?: { id: string; name: string; email: string; company: string | null } | null;
+}
+
+/** Live countdown: "Follow-up will be sent in: 2h 34m 12s" (updates every second) */
+function FollowUpCountdown({ followUpAfter }: { followUpAfter: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const end = new Date(followUpAfter).getTime();
+  const rem = Math.max(0, end - now);
+  const h = Math.floor(rem / 3600000);
+  const m = Math.floor((rem % 3600000) / 60000);
+  const s = Math.floor((rem % 60000) / 1000);
+  const text = rem <= 0 ? "Any moment…" : `${h}h ${m}m ${s}s`;
+  return <span className="tabular-nums">{text}</span>;
+}
+
 export default function InboxPage() {
   const [messages, setMessages] = useState<InboxMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -85,6 +110,8 @@ export default function InboxPage() {
   const [regenerating, setRegenerating] = useState(false);
   const [manualReplyText, setManualReplyText] = useState("");
   const [savingReply, setSavingReply] = useState(false);
+  const [checkingReplies, setCheckingReplies] = useState(false);
+  const [pendingFollowUps, setPendingFollowUps] = useState<PendingFollowUp[]>([]);
 
   const loadInbox = useCallback(async () => {
     setLoading(true);
@@ -104,6 +131,21 @@ export default function InboxPage() {
     return () => clearInterval(interval);
   }, [loadInbox]);
 
+  const loadPendingFollowUps = useCallback(async () => {
+    try {
+      const data = await fetchPendingFollowUpMessages();
+      setPendingFollowUps((data as PendingFollowUp[]) || []);
+    } catch {
+      setPendingFollowUps([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadPendingFollowUps();
+    const interval = setInterval(loadPendingFollowUps, 30000);
+    return () => clearInterval(interval);
+  }, [loadPendingFollowUps]);
+
   // Poll Gmail for new lead replies so they appear instantly
   useEffect(() => {
     const poll = async () => {
@@ -122,6 +164,29 @@ export default function InboxPage() {
     const t = setInterval(poll, 15000);
     return () => clearInterval(t);
   }, [loadInbox]);
+
+  const handleCheckReplies = async () => {
+    setCheckingReplies(true);
+    try {
+      const base = window.location.origin;
+      const r = await fetch(`${base}/api/fetch-replies`, { method: "POST" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        toast.error(data?.error || "Failed to fetch replies from Gmail");
+        return;
+      }
+      if (data?.updated > 0) {
+        await loadInbox();
+        toast.success(`${data.updated} new reply(ies) from Gmail`);
+      } else {
+        toast.info("No new replies in Gmail. Make sure IMAP is enabled and the lead’s email matches your Leads list.");
+      }
+    } catch {
+      toast.error("Could not reach the server. Is the dev server running?");
+    } finally {
+      setCheckingReplies(false);
+    }
+  };
 
   const filtered = messages
     .filter((m) => {
@@ -216,49 +281,6 @@ export default function InboxPage() {
     }
   };
 
-  const handleSimulateReply = async () => {
-    try {
-      const { data: sentMessages } = await supabase.from("messages").select("id, lead_id").eq("status", "sent").limit(1);
-      if (!sentMessages?.length) {
-        const { data: anyMsg } = await supabase.from("messages").select("id, lead_id").limit(1);
-        if (!anyMsg?.length) {
-          toast.error("No messages found. Run a workflow first.");
-          return;
-        }
-        const [m] = anyMsg;
-        const { data: lead } = await supabase.from("leads").select("*").eq("id", m.lead_id).single();
-        const replyText = `This sounds interesting, can you share more details about your solution?`;
-        await addReplyToMessage(m.id, replyText);
-        const { data: toneData } = await supabase.functions.invoke("analyze-tone", { body: { reply_text: replyText } });
-        const { data: followupData } = await supabase.functions.invoke("generate-followup", {
-          body: { lead, reply_text: replyText, reply_tone: toneData?.tone || "positive" },
-        });
-        await updateMessageReply(m.id, {
-          reply_tone: toneData?.tone || "positive",
-          followup_message: followupData?.followup_message || "",
-        });
-        toast.success("Demo reply added!");
-      } else {
-        const [m] = sentMessages;
-        const { data: lead } = await supabase.from("leads").select("*").eq("id", m.lead_id).single();
-        const replyText = `This sounds interesting, can you share more details?`;
-        await addReplyToMessage(m.id, replyText);
-        const { data: toneData } = await supabase.functions.invoke("analyze-tone", { body: { reply_text: replyText } });
-        const { data: followupData } = await supabase.functions.invoke("generate-followup", {
-          body: { lead, reply_text: replyText, reply_tone: toneData?.tone || "positive" },
-        });
-        await updateMessageReply(m.id, {
-          reply_tone: toneData?.tone || "positive",
-          followup_message: followupData?.followup_message || "",
-        });
-        toast.success("Demo reply added!");
-      }
-      loadInbox();
-    } catch (e) {
-      toast.error("Could not add demo reply. Ensure migration has run and AI is configured.");
-    }
-  };
-
   return (
     <div className="flex h-[calc(100vh-3.5rem)]">
       {/* Sidebar */}
@@ -291,15 +313,43 @@ export default function InboxPage() {
           ))}
         </nav>
         <div className="p-2 border-t border-white/20">
-          <Button variant="outline" size="sm" className="w-full gap-2" onClick={handleSimulateReply}>
-            <Mail className="h-3.5 w-3.5" />
-            Add Demo Reply
+          <Button variant="default" size="sm" className="w-full gap-2" onClick={handleCheckReplies} disabled={checkingReplies}>
+            {checkingReplies ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            Check for replies from Gmail
           </Button>
         </div>
       </div>
 
       {/* List */}
       <div className="w-80 border-r border-white/20 flex flex-col shrink-0">
+        {/* Scheduled follow-ups — always visible so the feature is clear; shows countdown when emails sent with no reply */}
+        <div className="p-3 border-b border-primary/20 bg-primary/5">
+          <p className="text-xs font-medium text-foreground flex items-center gap-1.5 mb-2">
+            <Clock className="h-3.5 w-3.5 text-primary" />
+            Scheduled follow-ups
+          </p>
+          {pendingFollowUps.length > 0 ? (
+            <div className="space-y-2 max-h-40 overflow-y-auto">
+              {pendingFollowUps.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-lg border border-white/10 bg-background/80 p-2.5 text-left"
+                >
+                  <p className="text-xs font-medium truncate">{item.leads?.name || "Unknown"}</p>
+                  <p className="text-[10px] text-muted-foreground truncate">{item.leads?.company || item.leads?.email || "—"}</p>
+                  <p className="text-[10px] text-primary mt-1.5 flex items-center gap-1">
+                    <Clock className="h-3 w-3 shrink-0" />
+                    Follow-up will be sent in: <FollowUpCountdown followUpAfter={item.follow_up_after!} />
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[10px] text-muted-foreground">
+              No follow-ups scheduled. Send emails from <strong>Workflow</strong> or <strong>Execution</strong> — if a lead doesn’t reply, a follow-up is sent automatically after 3h + 5–6 min. Countdowns will appear here.
+            </p>
+          )}
+        </div>
         <div className="p-3 border-b border-white/20">
           <p className="text-xs text-muted-foreground">
             {filtered.length} {filter === "all" ? "replies" : filter}
@@ -314,10 +364,7 @@ export default function InboxPage() {
             <div className="p-8 text-center text-muted-foreground text-sm">
               <Inbox className="h-12 w-12 mx-auto mb-2 opacity-50" />
               <p>No replies yet</p>
-              <p className="text-xs mt-1">Replies from leads will appear here when they respond to your emails</p>
-              <Button variant="outline" size="sm" className="mt-4" onClick={handleSimulateReply}>
-                Add Demo Reply
-              </Button>
+              <p className="text-xs mt-1">Click &quot;Check for replies from Gmail&quot; in the sidebar to pull real lead replies.</p>
             </div>
           ) : (
             filtered.map((msg) => {

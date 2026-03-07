@@ -27,6 +27,7 @@ import {
   updateMessageFollowupSent,
   addReplyToMessage,
 } from "@/lib/supabase-queries";
+import { invokeSendEmail } from "@/lib/edge-functions";
 import { supabase } from "@/integrations/supabase/client";
 
 type InboxFilter = "all" | "positive" | "neutral" | "negative" | "unread";
@@ -74,6 +75,31 @@ function classifyToneClient(text: string): "positive" | "neutral" | "negative" {
   if (positive.test(t) && !negative.test(t)) return "positive";
   if (negative.test(t)) return "negative";
   return "neutral";
+}
+
+/** Different follow-up templates so each Regenerate click can show a different suggestion */
+const FOLLOWUP_TEMPLATES: Array<(name: string, company: string) => string> = [
+  (name, company) =>
+    `Hi ${name}, thanks for getting back to me. I'd love to continue the conversation about ${company} and find a time that works for you. Would you have 15 minutes this week for a quick call? Best`,
+  (name, company) =>
+    `Hi ${name}, following up on my last message about ${company}. Would you have a few minutes to connect this week? Best`,
+  (name, company) =>
+    `Hi ${name}, I wanted to circle back on ${company}. If you're open to it, I'd be happy to jump on a short call at your convenience. Best`,
+  (name, company) =>
+    `Hi ${name}, thanks for your reply. I'd be glad to share more about how we can help ${company}. Would a 15-min chat this week work? Best`,
+  (name, company) =>
+    `Hi ${name}, no pressure at all. If the timing is better later, just say when. I'm happy to reconnect about ${company} whenever works for you. Best`,
+  (name, company) =>
+    `Hi ${name}, I appreciate you taking the time to respond. Would you be open to a quick call to discuss ${company} in more detail? Best`,
+  (name, company) =>
+    `Hi ${name}, let me know if you'd like to schedule a brief conversation about ${company} — I'm flexible on timing. Best`,
+  (name, company) =>
+    `Hi ${name}, following up — if you have a few minutes in the next week or two to connect about ${company}, I'd be happy to chat. Best`,
+];
+
+function pickRandomFollowUp(name: string, company: string): string {
+  const fn = FOLLOWUP_TEMPLATES[Math.floor(Math.random() * FOLLOWUP_TEMPLATES.length)];
+  return fn(name, company);
 }
 
 interface PendingFollowUp {
@@ -241,25 +267,30 @@ export default function InboxPage() {
   const handleAnalyzeAndGenerate = async (msg: InboxMessage) => {
     if (!msg.reply_text) return;
     setRegenerating(true);
+    let tone: string = "neutral";
+    let followup = "";
     try {
-      const { data: toneData } = await supabase.functions.invoke("analyze-tone", {
-        body: { reply_text: msg.reply_text },
-      });
-      const tone = toneData?.tone || "neutral";
-
+      try {
+        const { data: toneData } = await supabase.functions.invoke("analyze-tone", {
+          body: { reply_text: msg.reply_text },
+        });
+        tone = (toneData?.tone || classifyToneClient(msg.reply_text)) as string;
+      } catch {
+        tone = classifyToneClient(msg.reply_text) as string;
+      }
       const lead = msg.leads || {};
-      const { data: followupData } = await supabase.functions.invoke("generate-followup", {
-        body: { lead, reply_text: msg.reply_text, reply_tone: tone },
-      });
-      const followup = followupData?.followup_message || "";
-
+      const name = lead?.name || "there";
+      const company = lead?.company || "your company";
+      // Always pick a random template so 2nd/3rd Regenerate click shows a different message in the text box
+      followup = pickRandomFollowUp(name, company);
       await updateMessageReply(msg.id, { reply_tone: tone, followup_message: followup });
       setEditingFollowup(followup);
       setSelected((s) => (s?.id === msg.id ? { ...s, reply_tone: tone, followup_message: followup } : s));
       setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, reply_tone: tone, followup_message: followup } : m)));
       toast.success("Follow-up generated");
     } catch (e) {
-      toast.error("Failed to generate follow-up");
+      toast.error("Failed to save follow-up");
+      setEditingFollowup(followup || msg.followup_message || "");
     } finally {
       setRegenerating(false);
     }
@@ -267,8 +298,28 @@ export default function InboxPage() {
 
   const handleSendFollowup = async () => {
     if (!selected) return;
+    const leadEmail = selected.leads?.email;
+    if (!leadEmail?.trim()) {
+      toast.error("No email address for this lead.");
+      return;
+    }
+    if (selected.reply_tone === "negative") {
+      toast.error("Follow-up not sent: lead responded negatively. We don’t send follow-ups to avoid spam.");
+      return;
+    }
     setSendingFollowup(true);
     try {
+      const company = selected.leads?.company || "your request";
+      const subject = `Following up – ${company}`;
+      const { error } = await invokeSendEmail({
+        to: leadEmail.trim(),
+        subject,
+        body: editingFollowup,
+      });
+      if (error) {
+        toast.error(`Failed to send email: ${error}`);
+        return;
+      }
       await updateMessageReply(selected.id, { followup_message: editingFollowup });
       await updateMessageFollowupSent(selected.id);
       toast.success("Follow-up sent!");
@@ -476,7 +527,7 @@ export default function InboxPage() {
                   </div>
                 )}
 
-                {/* Follow-up panel — only when lead has replied */}
+                {/* Follow-up panel — only when lead has replied; no follow-up for negative tone (avoid spam) */}
                 {selected.reply_text && (
                 <Card className="border-0 glass-card">
                   <CardHeader className="py-3 flex flex-row items-center justify-between">
@@ -487,7 +538,7 @@ export default function InboxPage() {
                         size="sm"
                         className="h-7 text-xs"
                         onClick={() => handleAnalyzeAndGenerate(selected)}
-                        disabled={regenerating}
+                        disabled={regenerating || selected.reply_tone === "negative"}
                       >
                         {regenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
                         Regenerate
@@ -495,23 +546,32 @@ export default function InboxPage() {
                     </div>
                   </CardHeader>
                   <CardContent className="pt-0 space-y-3">
-                    <Textarea
-                      value={editingFollowup}
-                      onChange={(e) => setEditingFollowup(e.target.value)}
-                      placeholder="Generate a follow-up or type your own..."
-                      className="min-h-[100px] text-sm resize-none"
-                    />
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        className="gap-2"
-                        onClick={handleSendFollowup}
-                        disabled={!editingFollowup.trim() || sendingFollowup || selected.status === "followup_sent"}
-                      >
-                        {sendingFollowup ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                        {selected.status === "followup_sent" ? "Sent" : "Send Follow-Up"}
-                      </Button>
-                    </div>
+                    {selected.reply_tone === "negative" ? (
+                      <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-muted-foreground">
+                        <p className="font-medium text-foreground">No follow-up sent</p>
+                        <p className="text-xs mt-1">This lead responded negatively (e.g. not interested). We don’t send follow-up emails to avoid spam and respect their preference.</p>
+                      </div>
+                    ) : (
+                      <>
+                        <Textarea
+                          value={editingFollowup}
+                          onChange={(e) => setEditingFollowup(e.target.value)}
+                          placeholder="Generate a follow-up or type your own..."
+                          className="min-h-[100px] text-sm resize-none text-foreground bg-background/80"
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            className="gap-2"
+                            onClick={handleSendFollowup}
+                            disabled={!editingFollowup.trim() || sendingFollowup || selected.status === "followup_sent"}
+                          >
+                            {sendingFollowup ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                            {selected.status === "followup_sent" ? "Sent" : "Send Follow-Up"}
+                          </Button>
+                        </div>
+                      </>
+                    )}
                   </CardContent>
                 </Card>
                 )}

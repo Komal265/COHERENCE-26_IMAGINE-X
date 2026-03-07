@@ -135,7 +135,7 @@ export function sendEmailPlugin(): Plugin {
             const now = new Date().toISOString();
             const { data: rows } = await supabase
               .from("messages")
-              .select("id, lead_id, generated_message, leads (id, name, email, company)")
+              .select("id, lead_id, generated_message, reply_tone, leads (id, name, email, company)")
               .eq("status", "sent")
               .is("reply_text", null)
               .not("follow_up_after", "is", null)
@@ -145,7 +145,8 @@ export function sendEmailPlugin(): Plugin {
             const base = `http://127.0.0.1:${port}`;
             let sent = 0;
             for (const row of rows || []) {
-              const r = row as { id: string; lead_id: string; generated_message: string | null; leads: { id: string; name: string; email: string; company: string | null } | null };
+              const r = row as { id: string; lead_id: string; generated_message: string | null; reply_tone: string | null; leads: { id: string; name: string; email: string; company: string | null } | null };
+              if (r.reply_tone === "negative") continue;
               const lead = r.leads;
               if (!lead?.email) continue;
               const name = lead.name || "there";

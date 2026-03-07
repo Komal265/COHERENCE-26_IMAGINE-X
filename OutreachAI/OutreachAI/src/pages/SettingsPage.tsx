@@ -6,18 +6,25 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { getFromEmail, setFromEmail } from "@/lib/edge-functions";
+import { getFromEmail, setFromEmail, getMeetingLink, setMeetingLink } from "@/lib/edge-functions";
 
 export default function SettingsPage() {
   const [fromEmail, setFromEmailValue] = useState(getFromEmail());
+  const [meetingLink, setMeetingLinkValue] = useState(getMeetingLink());
 
   useEffect(() => {
     setFromEmailValue(getFromEmail());
+    setMeetingLinkValue(getMeetingLink());
   }, []);
 
   const handleSaveFromEmail = () => {
     setFromEmail(fromEmail);
     toast.success("Sender email saved. Emails will now go to your leads when you use a verified domain.");
+  };
+
+  const handleSaveMeetingLink = () => {
+    setMeetingLink(meetingLink);
+    toast.success("Meeting link saved. It will be added to follow-ups when a lead replies positively.");
   };
 
   return (
@@ -74,6 +81,28 @@ export default function SettingsPage() {
               className="rounded-lg font-mono"
             />
             <Button className="rounded-xl" onClick={handleSaveFromEmail}>Save sender email</Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-xl">
+        <CardHeader>
+          <CardTitle className="text-lg font-display">Meeting link (Calendly)</CardTitle>
+          <CardDescription>When a lead replies positively, follow-up emails can include this link so they can book a time. The meeting will appear on your connected calendar.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Calendly or booking page URL</Label>
+            <Input
+              value={meetingLink}
+              onChange={(e) => setMeetingLinkValue(e.target.value)}
+              placeholder="https://calendly.com/yourname/15min"
+              className="rounded-lg font-mono"
+            />
+            <p className="text-xs text-muted-foreground">
+              Create a free account at <a href="https://calendly.com" target="_blank" rel="noreferrer" className="text-primary underline">calendly.com</a>, connect your Google Calendar, then paste your booking link here.
+            </p>
+            <Button className="rounded-xl" onClick={handleSaveMeetingLink}>Save meeting link</Button>
           </div>
         </CardContent>
       </Card>

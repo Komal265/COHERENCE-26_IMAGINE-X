@@ -29,6 +29,19 @@ export function setFromEmail(value: string): void {
   else localStorage.removeItem(FROM_EMAIL_KEY);
 }
 
+const MEETING_LINK_KEY = "outreach_meeting_link";
+
+export function getMeetingLink(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(MEETING_LINK_KEY) || "";
+}
+
+export function setMeetingLink(value: string): void {
+  if (typeof window === "undefined") return;
+  if (value.trim()) localStorage.setItem(MEETING_LINK_KEY, value.trim());
+  else localStorage.removeItem(MEETING_LINK_KEY);
+}
+
 async function sendViaApi(url: string, params: { to: string; subject: string; body: string; fromEmail?: string }) {
   const res = await fetch(url, {
     method: "POST",

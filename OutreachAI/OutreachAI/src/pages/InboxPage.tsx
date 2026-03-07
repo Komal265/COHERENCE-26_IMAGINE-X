@@ -27,7 +27,7 @@ import {
   updateMessageFollowupSent,
   addReplyToMessage,
 } from "@/lib/supabase-queries";
-import { invokeSendEmail } from "@/lib/edge-functions";
+import { invokeSendEmail, getMeetingLink } from "@/lib/edge-functions";
 import { supabase } from "@/integrations/supabase/client";
 
 type InboxFilter = "all" | "positive" | "neutral" | "negative" | "unread";
@@ -225,10 +225,33 @@ export default function InboxPage() {
 
   const handleSelect = (msg: InboxMessage) => {
     setSelected(msg);
-    setEditingFollowup(msg.followup_message || "");
+    let followupText = msg.followup_message || "";
+    const meetingLink = getMeetingLink().trim();
+    // Always show meeting link in the box when saved in Settings (so it's visible regardless of tone)
+    const alreadyHasLink = meetingLink && (followupText.includes(meetingLink) || followupText.includes("Book a time that works for you"));
+    if (meetingLink && !alreadyHasLink) {
+      followupText = (followupText.trim() ? followupText.trim() + "\n\n" : "") + "Book a time that works for you: " + meetingLink;
+    }
+    setEditingFollowup(followupText);
     setManualReplyText("");
     if (!msg.is_read) markMessageRead(msg.id).catch(() => {});
   };
+
+  // When user returns from Settings (or page load with conversation already selected), ensure meeting link is in the box
+  useEffect(() => {
+    const applyMeetingLink = () => {
+      if (!selected?.reply_text) return;
+      const link = getMeetingLink().trim();
+      if (!link) return;
+      setEditingFollowup((prev) => {
+        if (prev.includes(link) || prev.includes("Book a time that works for you")) return prev;
+        return (prev.trim() ? prev.trim() + "\n\n" : "") + "Book a time that works for you: " + link;
+      });
+    };
+    applyMeetingLink();
+    window.addEventListener("focus", applyMeetingLink);
+    return () => window.removeEventListener("focus", applyMeetingLink);
+  }, [selected?.id, selected?.reply_text]);
 
   const handleSaveManualReply = async () => {
     if (!selected || !manualReplyText.trim()) return;
@@ -283,6 +306,11 @@ export default function InboxPage() {
       const company = lead?.company || "your company";
       // Always pick a random template so 2nd/3rd Regenerate click shows a different message in the text box
       followup = pickRandomFollowUp(name, company);
+      // When tone is positive, append Calendly/meeting link if set in Settings
+      const meetingLink = getMeetingLink().trim();
+      if (meetingLink && String(tone).toLowerCase() === "positive") {
+        followup = followup.trim() + "\n\nBook a time that works for you: " + meetingLink;
+      }
       await updateMessageReply(msg.id, { reply_tone: tone, followup_message: followup });
       setEditingFollowup(followup);
       setSelected((s) => (s?.id === msg.id ? { ...s, reply_tone: tone, followup_message: followup } : s));

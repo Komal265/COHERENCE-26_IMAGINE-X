@@ -142,6 +142,21 @@ export async function fetchInboxMessages(filter?: "all" | "positive" | "neutral"
   );
 }
 
+/** Fetch all sent emails for Inbox (status sent, replied, or followup_sent) with leads */
+export async function fetchInboxSentMessages() {
+  const { data, error } = await supabase
+    .from("messages")
+    .select(`
+      *,
+      leads (id, name, email, company, role, industry)
+    `)
+    .in("status", ["sent", "replied", "followup_sent"])
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+/** Fetch only messages that have a reply (for Inbox — replies only) */
 export async function fetchMessagesWithReplies() {
   const { data, error } = await supabase
     .from("messages")
@@ -149,9 +164,10 @@ export async function fetchMessagesWithReplies() {
       *,
       leads (id, name, email, company, role, industry)
     `)
-    .order("created_at", { ascending: false });
+    .not("reply_text", "is", null)
+    .order("reply_received_at", { ascending: false });
   if (error) throw error;
-  return (data || []).filter((m: any) => m.reply_text != null);
+  return data || [];
 }
 
 export async function addReplyToMessage(

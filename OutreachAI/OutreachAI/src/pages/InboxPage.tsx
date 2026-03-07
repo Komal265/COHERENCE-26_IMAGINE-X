@@ -20,7 +20,6 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "sonner";
 import {
-  fetchInboxMessages,
   fetchMessagesWithReplies,
   updateMessageReply,
   markMessageRead,
@@ -43,7 +42,8 @@ interface InboxMessage {
   reply_received_at: string | null;
   is_read: boolean | null;
   tone_confidence: number | null;
-  leads?: { id: string; name: string; email: string; company: string | null; role: string | null } | null;
+  created_at?: string;
+  leads?: { id: string; name: string; email: string; company: string | null; role: string | null; industry?: string | null } | null;
 }
 
 const toneConfig = {
@@ -65,6 +65,16 @@ function formatTimeAgo(dateStr: string | null) {
   return `${Math.floor(diffHours / 24)}d ago`;
 }
 
+/** Classify reply tone as positive, neutral, or negative (client-side fallback) */
+function classifyToneClient(text: string): "positive" | "neutral" | "negative" {
+  const t = text.toLowerCase();
+  const positive = /\b(thanks|thank you|interested|great|awesome|yes|sure|sounds good|love to|happy to|excited|perfect|wonderful|looking forward)\b/i;
+  const negative = /\b(no thanks|not interested|stop|unsubscribe|remove|don't contact|wrong person|busy|no time)\b/i;
+  if (positive.test(t) && !negative.test(t)) return "positive";
+  if (negative.test(t)) return "negative";
+  return "neutral";
+}
+
 export default function InboxPage() {
   const [messages, setMessages] = useState<InboxMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,6 +83,8 @@ export default function InboxPage() {
   const [editingFollowup, setEditingFollowup] = useState("");
   const [sendingFollowup, setSendingFollowup] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [manualReplyText, setManualReplyText] = useState("");
+  const [savingReply, setSavingReply] = useState(false);
 
   const loadInbox = useCallback(async () => {
     setLoading(true);
@@ -92,16 +104,73 @@ export default function InboxPage() {
     return () => clearInterval(interval);
   }, [loadInbox]);
 
-  const filtered = messages.filter((m) => {
-    if (filter === "all") return true;
-    if (filter === "unread") return !m.is_read;
-    return m.reply_tone === filter;
-  });
+  // Poll Gmail for new lead replies so they appear instantly
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const base = window.location.origin;
+        const r = await fetch(`${base}/api/fetch-replies`, { method: "POST" });
+        if (r.ok) {
+          const data = await r.json();
+          if (data?.updated > 0) loadInbox();
+        }
+      } catch {
+        // ignore
+      }
+    };
+    poll();
+    const t = setInterval(poll, 15000);
+    return () => clearInterval(t);
+  }, [loadInbox]);
+
+  const filtered = messages
+    .filter((m) => {
+      if (filter === "all") return true;
+      if (filter === "unread") return !m.is_read;
+      if (filter === "positive" || filter === "neutral" || filter === "negative") return m.reply_tone === filter;
+      return true;
+    })
+    .sort((a, b) => new Date(b.reply_received_at || b.created_at || 0).getTime() - new Date(a.reply_received_at || a.created_at || 0).getTime());
 
   const handleSelect = (msg: InboxMessage) => {
     setSelected(msg);
     setEditingFollowup(msg.followup_message || "");
+    setManualReplyText("");
     if (!msg.is_read) markMessageRead(msg.id).catch(() => {});
+  };
+
+  const handleSaveManualReply = async () => {
+    if (!selected || !manualReplyText.trim()) return;
+    setSavingReply(true);
+    try {
+      let tone: "positive" | "neutral" | "negative" = "neutral";
+      try {
+        const { data: toneData } = await supabase.functions.invoke("analyze-tone", { body: { reply_text: manualReplyText } });
+        tone = (toneData?.tone || classifyToneClient(manualReplyText)) as "positive" | "neutral" | "negative";
+      } catch {
+        tone = classifyToneClient(manualReplyText);
+      }
+      const lead = selected.leads || {};
+      let followup = "";
+      try {
+        const { data: followupData } = await supabase.functions.invoke("generate-followup", {
+          body: { lead, reply_text: manualReplyText, reply_tone: tone },
+        });
+        followup = followupData?.followup_message || "";
+      } catch {
+        followup = "";
+      }
+      await addReplyToMessage(selected.id, manualReplyText.trim(), tone, followup);
+      setSelected((s) => (s?.id === selected.id ? { ...s, reply_text: manualReplyText.trim(), reply_tone: tone, followup_message: followup, reply_received_at: new Date().toISOString(), status: "replied" } : s));
+      setMessages((prev) => prev.map((m) => (m.id === selected.id ? { ...m, reply_text: manualReplyText.trim(), reply_tone: tone, followup_message: followup, reply_received_at: new Date().toISOString(), status: "replied" } : m)));
+      setManualReplyText("");
+      setEditingFollowup(followup);
+      toast.success(`Reply saved and classified as ${tone}`);
+    } catch {
+      toast.error("Failed to save reply");
+    } finally {
+      setSavingReply(false);
+    }
   };
 
   const handleAnalyzeAndGenerate = async (msg: InboxMessage) => {
@@ -199,15 +268,15 @@ export default function InboxPage() {
             <Inbox className="h-5 w-5 text-primary" />
             Inbox
           </h2>
-          <p className="text-xs text-muted-foreground mt-0.5">Replies & follow-ups</p>
+          <p className="text-xs text-muted-foreground mt-0.5">Replies from leads</p>
         </div>
         <nav className="p-2 flex-1">
           {[
-            { id: "all" as const, label: "All Replies", icon: MessageSquare },
+            { id: "all" as const, label: "All", icon: MessageSquare },
             { id: "positive" as const, label: "Positive", icon: ThumbsUp },
             { id: "neutral" as const, label: "Neutral", icon: Minus },
             { id: "negative" as const, label: "Negative", icon: ThumbsDown },
-            { id: "unread" as const, label: "Unread", icon: Mail },
+            { id: "unread" as const, label: "Unread", icon: Inbox },
           ].map((item) => (
             <button
               key={item.id}
@@ -245,7 +314,7 @@ export default function InboxPage() {
             <div className="p-8 text-center text-muted-foreground text-sm">
               <Inbox className="h-12 w-12 mx-auto mb-2 opacity-50" />
               <p>No replies yet</p>
-              <p className="text-xs mt-1">Replies will appear here when leads respond</p>
+              <p className="text-xs mt-1">Replies from leads will appear here when they respond to your emails</p>
               <Button variant="outline" size="sm" className="mt-4" onClick={handleSimulateReply}>
                 Add Demo Reply
               </Button>
@@ -253,7 +322,7 @@ export default function InboxPage() {
           ) : (
             filtered.map((msg) => {
               const lead = msg.leads;
-              const tc = toneConfig[msg.reply_tone as keyof typeof toneConfig] || toneConfig.neutral;
+              const tc = msg.reply_tone ? (toneConfig[msg.reply_tone as keyof typeof toneConfig] || toneConfig.neutral) : toneConfig.neutral;
               const ToneIcon = tc.icon;
               return (
                 <motion.div
@@ -272,15 +341,18 @@ export default function InboxPage() {
                   </Avatar>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium truncate">{lead?.name || "Unknown"}</p>
-                    <p className="text-[10px] text-muted-foreground truncate">{lead?.company || "—"}</p>
-                    <p className="text-[10px] text-muted-foreground truncate mt-0.5">{msg.reply_text?.slice(0, 40)}...</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{lead?.company || lead?.email || "—"}</p>
+                    <p className="text-[10px] text-muted-foreground truncate mt-0.5">
+                      {msg.reply_text?.slice(0, 50) || "—"}
+                      {(msg.reply_text?.length ?? 0) > 50 ? "..." : ""}
+                    </p>
                   </div>
                   <div className="shrink-0 flex flex-col items-end gap-1">
                     <Badge variant="outline" className={`text-[9px] ${tc.color}`}>
                       <ToneIcon className="h-2.5 w-2.5 mr-0.5" />
                       {tc.label}
                     </Badge>
-                    <span className="text-[9px] text-muted-foreground">{formatTimeAgo(msg.reply_received_at)}</span>
+                    <span className="text-[9px] text-muted-foreground">{formatTimeAgo(msg.reply_received_at || msg.created_at)}</span>
                   </div>
                   <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
                 </motion.div>
@@ -335,7 +407,7 @@ export default function InboxPage() {
                   </CardContent>
                 </Card>
 
-                {/* Lead reply */}
+                {/* Lead reply (Inbox shows only replies) */}
                 <Card className="border-0 glass-card border-l-4 border-l-primary">
                   <CardHeader className="py-3">
                     <CardTitle className="text-sm">Lead Reply</CardTitle>
@@ -349,7 +421,7 @@ export default function InboxPage() {
                 {/* AI Analysis */}
                 {selected.reply_tone && (
                   <div className="rounded-xl glass-stage p-3">
-                    <p className="text-xs font-medium text-muted-foreground mb-1">AI Analysis</p>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Clustered tone</p>
                     <p className="text-sm">
                       Tone: <span className="font-medium capitalize">{selected.reply_tone}</span>
                       {selected.tone_confidence && ` · Confidence: ${selected.tone_confidence}%`}
@@ -357,7 +429,8 @@ export default function InboxPage() {
                   </div>
                 )}
 
-                {/* Follow-up panel */}
+                {/* Follow-up panel — only when lead has replied */}
+                {selected.reply_text && (
                 <Card className="border-0 glass-card">
                   <CardHeader className="py-3 flex flex-row items-center justify-between">
                     <CardTitle className="text-sm">Suggested Follow-Up</CardTitle>
@@ -394,6 +467,7 @@ export default function InboxPage() {
                     </div>
                   </CardContent>
                 </Card>
+                )}
               </div>
             </motion.div>
           ) : (
